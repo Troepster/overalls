@@ -10,6 +10,9 @@ level [Ponytail](https://github.com/DietrichGebert/ponytail) and
 Once the context passes 75% (and Claude isn't mid-turn), a **Compact** button
 appears in the band.
 
+Where the widgets don't fit on one row, they wrap whole onto a second, while
+Compact and **⚙** stay at the right of the first.
+
 ## Install
 
 In the Claude Code terminal:
@@ -79,8 +82,10 @@ you set the same setting with `/overalls` in a session that has the row.
 | Caveman mode | `off` · `icon` · `text` (typed; anything else counts as `icon`) | `icon` | Show Caveman's mode where it's installed, after 🪨 or the word `caveman:` |
 | Offer megacave | `on` · `off` | `off` | List Caveman's Classical Chinese mode (`megacave`) in its dropdown; in the Config box it sits on Caveman's row |
 | Usage limits | `on` · `off` | `on` | Show how much of your 5-hour and weekly limits is spent (subscriptions only) |
+| Limit resets | `on` · `off` | `on` | Show how long until each limit resets (`5h 42% ↻1h20m`); in the Config box it sits on the Limits row |
 | Session cost | `on` · `off` | `off` | Show what this session has cost so far |
 | MCP warnings | `on` · `off` | `on` | Warn when an MCP server or connector fails or needs signing in again |
+| Running agents | `on` · `off` | `on` | Show `⧗ 2 agents` while subagents run; pressing it lists them (type and task) |
 
 What each weather level shows:
 
@@ -170,8 +175,13 @@ does stays inside your Claude Code session:
 
 - reads the session's context-window usage (`$.session.usage()`) after each turn
 - reads your Claude Code settings to see whether Ponytail is enabled
-- reads the session's usage-limit percentages and cost (`$.session.usage()`)
-  when those widgets are on
+- reads the session's usage-limit percentages, reset times and cost
+  (`$.session.usage()`) when those widgets are on, and the clock to count down
+  to each reset
+- reads the session's list of subagents (`$.agent.list()`: type, task, status)
+  when the agents widget is on
+- redraws the band every 30 seconds, so countdowns and the agent count stay
+  current
 - reads your Claude Code settings to see whether Caveman is enabled and, if it
   is, this session's id and Caveman's mode file for it in your Claude config
   directory: `.caveman-sessions/<session id>.mode` (or `.caveman-active` when

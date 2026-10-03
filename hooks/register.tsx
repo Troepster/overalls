@@ -10,14 +10,14 @@ const level = atom({ plugin: 'overalls', key: 'level' } as const, '')
 const caveman = atom({ plugin: 'overalls', key: 'caveman' } as const, '')
 const mcpDown = atom({ plugin: 'overalls', key: 'mcpDown' } as const, {} as Record<string, McpTrouble>)
 // Which box is open above the band, if any: ⚙'s Config box or the MCP errors box. One at a time.
-const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp')
+const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents')
 
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
 const PONY = ['off', 'icon', 'text'] as const
 const ONOFF = ['on', 'off'] as const
 // Every setting and what it takes, in /overalls, the Config box and userConfig alike.
-const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, cost: ONOFF, mcp: ONOFF } as const
+const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
@@ -27,7 +27,9 @@ const TIPS = {
   'cfg-ponytail': 'Ponytail: the level the Ponytail plugin is running at',
   'cfg-caveman': 'Caveman: the mode the Caveman plugin is running in',
   'cfg-megacave': 'Megacave: offer Caveman\'s Classical Chinese mode in its dropdown',
-  'cfg-limits': 'Limits: how much of your 5-hour and weekly usage is spent',
+  'cfg-limits': 'Limits: how much of your 5-hour and weekly usage is spent, and when each resets',
+  'cfg-resets': 'Resets: how long until each limit resets',
+  'cfg-agents': 'Agents: how many subagents are running; press it to see them',
   'cfg-cost': 'Cost: what this session has cost so far',
   'cfg-mcp': 'MCP: a warning when an MCP server or connector fails or needs signing in again',
 } as const
@@ -209,6 +211,13 @@ const dismissMcp = ($: EngineInterface, server?: string) =>
 // The error as Claude saw it, on one line and cut short.
 const detailOf = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 100)
 
+// How long until a limit resets, at the two largest units: 1h20m, 3d4h, 12m; now or past, 0m.
+export const untilReset = (resetsAt: string, now: number) => {
+  const m = Math.max(0, Math.round((Date.parse(resetsAt) - now) / 60000))
+  const [d, h, min] = [Math.floor(m / 1440), Math.floor((m % 1440) / 60), m % 60]
+  return d ? `${d}d${h ? `${h}h` : ''}` : h ? `${h}h${min ? `${min}m` : ''}` : `${min}m`
+}
+
 export const weather = (percent: number) =>
   percent < 25 ? { icon: '☀', word: 'Clear' }
   : percent < 50 ? { icon: '☁', word: 'Cloudy' }
@@ -260,6 +269,18 @@ const pct = (r: Reading) => (r.tokens / r.window) * 100
 // Bars scale to the window, so a full bar means a full context, not the busiest turn.
 export const bar = (r: Reading) => BARS[Math.min(7, Math.floor(pct(r) / 12.5))]
 
+// The same bars as an Svg: 4 px wide, 1 px apart, rising from the bottom of a 14 px line, at least
+// 1 px tall so an empty turn still shows.
+export const sparkSvg = (readings: Reading[]) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${readings.length * 5} 14">` +
+  readings
+    .map((r, i) => {
+      const h = Math.max(1, Math.round((Math.min(100, pct(r)) / 100) * 14))
+      return `<rect x="${i * 5}" y="${14 - h}" width="4" height="${h}" rx="0.5" fill="${heat(pct(r))}"/>`
+    })
+    .join('') +
+  '</svg>'
+
 // The engine skips a plugin's own session.compact hook for a compaction that plugin
 // started, so the button calls this too.
 async function recordDrop($: EngineInterface, tokensAfter?: number) {
@@ -290,6 +311,8 @@ async function prefs($: EngineInterface, options: Options) {
     cave: ponyMode(saved.caveman ?? options.caveman),
     megacave: pick('megacave') === 'on',
     limits: pick('limits') !== 'off',
+    resets: pick('resets') !== 'off',
+    agents: pick('agents') !== 'off',
     cost: pick('cost') === 'on',
     mcp: pick('mcp') !== 'off',
   }
@@ -321,6 +344,11 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'overalls', description: 'Set the Overalls band', argumentHint: USAGE })
     await refreshPonytail($, options)
+    // Redraw every 30 s, so reset countdowns and the agent count move while nothing else happens.
+    // A reload drops this environment's timers, so there is only ever the one.
+    try {
+      $.clock.every(30_000, () => $.ui.invalidate('ui.render'))
+    } catch {}
     return next(e)
   })
 
@@ -329,7 +357,7 @@ export const register: Register = (on, options) => {
     const value = field in FIELDS && (FIELDS[field as Field] as readonly string[]).includes(arg) ? arg : undefined
     if (value === undefined) {
       const p = await prefs($, options)
-      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
+      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
       return { text: `Overalls ${now}\nUsage: /overalls ${USAGE}` }
     }
     const deny = await setPref($, options, field, value)
@@ -399,7 +427,7 @@ export const register: Register = (on, options) => {
 
   // Don't name a local `h`: JSX compiles to the global h().
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, cost, mcp } = await prefs($, options)
+    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents } = await prefs($, options)
     const down = mcp ? Object.entries(await read($, mcpDown)) : []
     const readings = detail === 'off' ? [] : await read($, history)
     const pony = ponyAs !== 'off' ? await read($, ponytail) : ''
@@ -409,20 +437,25 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey) return next(e)
     const els = $.ui.resolve(e)
     const { Box, Button, Link, Text } = els
-    // Widgets sit a gap apart; the spacer after them takes the slack, so ⚙ (and Compact) keep
-    // to the right.
-    const widget = (...children: ReturnType<typeof Text>[]) => <Box flexDirection="row">{...children}</Box>
-    const band = (widgets: ReturnType<typeof Box>[], ...end: ReturnType<typeof Box>[]) =>
+    // Widgets never shrink (the desktop app would wrap the text inside one); they wrap whole onto
+    // further rows of their own box, which takes the free width, so Compact and ⚙ hold the right
+    // end of the first row.
+    type El = ReturnType<typeof Box>
+    const widget = (...children: El[]) => <Box flexDirection="row" flexShrink={0}>{...children}</Box>
+    const band = (widgets: El[], ...end: El[]) =>
       withPanel(
-        <Box flexDirection="row" width="100%" gap={2}>
-          {...widgets}
-          <Box flexDirection="row" flexGrow={1} />
+        <Box flexDirection="row" width="100%" alignItems="flex-start" gap={2}>
+          <Box flexDirection="row" flexWrap="wrap" flexGrow={1} flexShrink={1} columnGap={2} rowGap={1}>
+            {...widgets}
+          </Box>
           {...end}
           {settings}
         </Box>,
       )
     // The Ponytail logo stands for the word: an Svg on the remote surfaces, an Image on the
     // terminal, which draws the word dim in its place where it can't show pictures.
+    // A cell between a plugin's icon (or word) and its level.
+    const iconGap = <Box flexDirection="row" width={1} flexShrink={0} />
     const ponyIcon =
       ponyAs === 'text' ? (
         <Text dimColor>ponytail:</Text>
@@ -471,12 +504,30 @@ export const register: Register = (on, options) => {
       ? [
           widget(
             caveAs === 'text' ? <Text dimColor>caveman:</Text> : <Text>🪨</Text>,
+            iconGap,
             // Megacave answers in Classical Chinese, so it's offered only when asked for.
             picker('caveman-mode', cave, megacave ? CAVE_MODES : CAVE_MODES.filter(m => m !== 'megacave'), v => switchCaveman($, v)),
           ),
         ]
       : []
     const LIMIT = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' } as Record<string, string>
+    const nowMs = await $.clock.now().catch(() => Date.now())
+    // Subagents still running, the model's and plugins' alike; pressing the count lists them.
+    const running = agents ? (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') : []
+    const agentSegment = running.length
+      ? [
+          widget(
+            <Text dimColor>⧗ </Text>,
+            <Button
+              key="agents"
+              label={`${running.length} agent${running.length === 1 ? '' : 's'}`}
+              plain
+              hover={{ scope: 'agents', underline: true }}
+              onPress={() => void update($, panel, p => (p === 'agents' ? '' : 'agents'))}
+            />,
+          ),
+        ]
+      : []
     const usageSegments = [
       ...(limits && usage?.rateLimits.length
         ? [
@@ -485,6 +536,7 @@ export const register: Register = (on, options) => {
                 ...(i ? [<Text dimColor> · </Text>] : []),
                 <Text dimColor>{LIMIT[r.kind] ?? r.kind} </Text>,
                 <Text color={heat(r.percentUsed)}>{Math.round(r.percentUsed)}%</Text>,
+                ...(resets && r.resetsAt ? [<Text dimColor> ↻{untilReset(r.resetsAt, nowMs)}</Text>] : []),
               ]),
             ),
           ]
@@ -506,7 +558,7 @@ export const register: Register = (on, options) => {
           ),
         ]
       : []
-    const ponySegment = [...mcpSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, level)] : []), ...caveSegment]
+    const ponySegment = [...mcpSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment]
     // No tooltip prop: each card is drawn hidden over the Config box's blank row, revealed by its
     // hover scope.
     const tip = (scope: keyof typeof TIPS) => (
@@ -523,6 +575,7 @@ export const register: Register = (on, options) => {
     const choice = (field: string, value: string, current: boolean) => (
       <Button key={`${field}-${value}`} label={`${value}${current ? ' ✓' : ''}`} plain dimColor={!current} onPress={() => void set(field, value)} />
     )
+    // Settings sit in two bordered columns (the band's slot is capped at half the window's height).
     const setting = (field: Field, name: string, choices: (ReturnType<typeof Button> | ReturnType<typeof Text>)[]) => (
       <Box flexDirection="row">
         <Box flexDirection="row" width={10}>
@@ -579,8 +632,27 @@ export const register: Register = (on, options) => {
         ))}
       </Box>
     )
+    const agentsBox = (
+      <Box flexDirection="column" borderStyle="round" paddingX={1} marginBottom={1}>
+        <Text bold>Agents running</Text>
+        <Text> </Text>
+        {...running.map(a => (
+          <Box flexDirection="row" gap={2}>
+            <Box flexDirection="row" width={18}>
+              <Text dimColor>{a.type}</Text>
+            </Box>
+            <Text>{a.description.replace(/\s+/g, ' ').slice(0, 80)}</Text>
+          </Box>
+        ))}
+      </Box>
+    )
     const withPanel = (band: ReturnType<typeof Box>) =>
-      shown === 'mcp' && down.length ? (
+      shown === 'agents' && running.length ? (
+        <Box flexDirection="column" width="100%">
+          {agentsBox}
+          {band}
+        </Box>
+      ) : shown === 'mcp' && down.length ? (
         <Box flexDirection="column" width="100%">
           {mcpBox}
           {band}
@@ -593,19 +665,32 @@ export const register: Register = (on, options) => {
               <Text> </Text>
               {...(Object.keys(TIPS) as (keyof typeof TIPS)[]).map(tip)}
             </Box>
-            {setting('weather', 'Weather', DETAILS.map(d => choice('weather', d, d === detail)))}
-            {setting('ponytail', 'Ponytail', [...PONY.map(m => choice('ponytail', m, m === ponyAs)), ...installPonytail])}
-            {setting('caveman', 'Caveman', [
-              ...PONY.map(m => choice('caveman', m, m === caveAs)),
-              // Megacave belongs to Caveman, so its switch shares the row, past a divider.
-              <Text dimColor>│</Text>,
-              <Text hover={{ scope: 'cfg-megacave', underline: true }}>megacave</Text>,
-              ...ONOFF.map(m => choice('megacave', m, (m === 'on') === megacave)),
-              ...installCaveman,
-            ])}
-            {setting('limits', 'Limits', ONOFF.map(m => choice('limits', m, (m === 'on') === limits)))}
-            {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
-            {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
+            <Box flexDirection="row" gap={1}>
+              <Box flexDirection="column" width="50%" borderStyle="round" borderDimColor paddingX={1}>
+                {setting('weather', 'Weather', DETAILS.map(d => choice('weather', d, d === detail)))}
+                {setting('caveman', 'Caveman', [
+                  ...PONY.map(m => choice('caveman', m, m === caveAs)),
+                  // Megacave belongs to Caveman, so its switch shares the row, past a divider.
+                  <Text dimColor>│</Text>,
+                  <Text hover={{ scope: 'cfg-megacave', underline: true }}>megacave</Text>,
+                  ...ONOFF.map(m => choice('megacave', m, (m === 'on') === megacave)),
+                  ...installCaveman,
+                ])}
+                {setting('limits', 'Limits', [
+                  ...ONOFF.map(m => choice('limits', m, (m === 'on') === limits)),
+                  // Resets belong to the limits, so their switch shares the row, past a divider.
+                  <Text dimColor>│</Text>,
+                  <Text hover={{ scope: 'cfg-resets', underline: true }}>resets</Text>,
+                  ...ONOFF.map(m => choice('resets', m, (m === 'on') === resets)),
+                ])}
+                {setting('agents', 'Agents', ONOFF.map(m => choice('agents', m, (m === 'on') === agents)))}
+              </Box>
+              <Box flexDirection="column" width="50%" borderStyle="round" borderDimColor paddingX={1}>
+                {setting('ponytail', 'Ponytail', [...PONY.map(m => choice('ponytail', m, m === ponyAs)), ...installPonytail])}
+                {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
+                {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
+              </Box>
+            </Box>
           </Box>
           {band}
         </Box>
@@ -635,6 +720,14 @@ export const register: Register = (on, options) => {
       }
     }
 
+    // Block characters sit on the font's baseline and widen in the desktop app's font, so the remote
+    // surfaces get the bars as an Svg the height of a line; the terminal keeps the characters.
+    const sparkline =
+      e.surface !== 'terminal' && 'Svg' in els ? (
+        <els.Svg alt={`Context over the last ${readings.length} turns`} width={readings.length * 5} height={14} source={sparkSvg(readings)} />
+      ) : (
+        <Text>{...readings.map(r => <Text color={heat(pct(r))}>{bar(r)}</Text>)}</Text>
+      )
     const forecast = (
       <Button key="detail" label={detail === 'minimal' ? `${percent}%` : w.word} plain hover={{ scope: 'forecast', underline: true }} onPress={cycle} />
     )
@@ -647,7 +740,7 @@ export const register: Register = (on, options) => {
         ),
         ...(detail === 'full'
           ? [
-              widget(...readings.map(r => <Text color={heat(pct(r))}>{bar(r)}</Text>)),
+              widget(sparkline),
               widget(<Text dimColor>{delta >= 0 ? '▲ +' : '▼ -'}{fmt(Math.abs(delta))} last turn</Text>),
             ]
           : []),
