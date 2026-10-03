@@ -1,0 +1,21 @@
+{
+  "name": "overalls",
+  "version": "0.1.0",
+  "description": "Status band above the prompt: context weather and Ponytail level",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "weather": {
+      "type": "string",
+      "title": "Weather detail",
+      "description": "How much of the context forecast to show",
+      "options": ["off", "minimal", "normal", "full"],
+      "default": "full"
+    },
+    "ponytail": {
+      "type": "boolean",
+      "title": "Show Ponytail level",
+      "description": "Show whether Ponytail is installed and its current level",
+      "default": true
+    }
+  }
+}
