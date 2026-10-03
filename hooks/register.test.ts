@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { bar, caveMode, contrast, fmt, heat, hexToRgb, levelAfter, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
+import { bar, caveMode, contrast, fmt, sparkSvg, heat, hexToRgb, levelAfter, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -55,7 +55,7 @@ test('band draws, offers Compact from 75%, and records the drop', async ($, on) 
   await turn(134400)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'overalls', surface, component: 'AbovePrompt', props: PROPS })
-    expect(await textOf(ui)).toBe('☂ Showers 67% · 134.4k / 200k▂▆▲ +98.3k last turn')
+    expect(await textOf(ui)).toBe(onSurface(surface, '☂ Showers 67% · 134.4k / 200k▂▆▲ +98.3k last turn'))
     expect(await ui.find({ key: 'compact' })).toBeUndefined()
     await ui.unmount()
   }
@@ -86,10 +86,22 @@ test('ponytail label', () => {
 // The band's words run together (widgets are spaced by layout, not text), with the forecast
 // Button's label and the Ponytail dropdown's value in place: ⚙, Compact and the hover cards
 // (the only inverse Text) are left out.
-const textOf = async (ui: { findAll: (q: object) => Promise<{ type: string; key?: string; text: string; props: Record<string, unknown> }[]> }) =>
-  (await ui.findAll({}))
-    .map(n => (n.type === 'Text' ? (n.props.inverse ? '' : n.text) : n.type === 'Select' ? ` ${String(n.props.value)}` : n.type === 'Button' && n.props.label !== '⚙' && n.props.label !== 'Compact' ? String(n.props.label) : ''))
+// The desktop app draws the sparkline as an Svg, so its bars are text in the terminal only.
+const onSurface = (surface: string, text: string) => (surface === 'terminal' ? text : text.replace(/[▁-█]+/, ''))
+
+// A Text wrapping Texts (the sparkline) is listed before them with their words as its own, so it
+// counts once: skipped when the Texts after it spell exactly its text.
+const textOf = async (ui: { findAll: (q: object) => Promise<{ type: string; key?: string; text: string; props: Record<string, unknown> }[]> }) => {
+  const nodes = await ui.findAll({})
+  const wraps = (i: number) => {
+    let joined = ''
+    for (let j = i + 1; j < nodes.length && nodes[j]?.type === 'Text' && joined.length < nodes[i]!.text.length; j++) joined += nodes[j]!.text
+    return joined === nodes[i]!.text && joined !== ''
+  }
+  return nodes
+    .map((n, i) => (n.type === 'Text' ? (n.props.inverse || wraps(i) ? '' : n.text) : n.type === 'Select' ? ` ${String(n.props.value)}` : n.type === 'Button' && n.props.label !== '⚙' && n.props.label !== 'Compact' ? String(n.props.label) : ''))
     .join('')
+}
 
 for (const [detail, expected] of [
   ['minimal', '☂ 67% ultra'],
@@ -111,7 +123,7 @@ for (const [detail, expected] of [
     }
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ plugin: 'overalls', surface, component: 'AbovePrompt', props: PROPS })
-      expect(await textOf(ui)).toBe(expected)
+      expect(await textOf(ui)).toBe(onSurface(surface, expected))
       // The Ponytail logo stands for the word: a terminal Image, an Svg elsewhere.
       expect(await ui.find({ type: surface === 'terminal' ? 'Image' : 'Svg' })).toBeDefined()
       // One line: Box's default direction differs by surface (desktop stacks), so every Box says row.
@@ -272,8 +284,11 @@ test('the ⚙ Config box sets each choice in one press', { options: { weather: '
   on('config.list', () => ({ value: [] }))
   const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
   await ui.press({ key: 'settings' })
-  // The bordered Config box sits above the band: the only Boxes that stack are it and its parent.
-  expect((await ui.findAll({ type: 'Box' })).map(b => b.props.flexDirection).filter(d => d !== 'row')).toEqual(['column', 'column'])
+  // The bordered Config box sits above the band (it and its parent stack), its settings in two
+  // bordered columns side by side.
+  const boxes = (await ui.findAll({ type: 'Box' })).map(b => b.props)
+  expect(boxes.map(b => b.flexDirection).filter(d => d !== 'row')).toEqual(['column', 'column', 'column', 'column'])
+  expect(boxes.filter(b => b.width === '50%' && b.borderStyle === 'round')).toHaveLength(2)
   expect((await ui.find({ key: 'settings' }))?.props.variant).toBe('primary')
   expect((await ui.find({ key: 'weather-minimal' }))?.props.label).toBe('minimal ✓')
   await ui.press({ key: 'weather-off' })
@@ -297,7 +312,7 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Cost', 'MCP'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Agents', 'Cost', 'MCP'])
   await ui.unmount()
 })
 
@@ -424,6 +439,46 @@ test('Caveman draws nothing where it is not installed', { options: { weather: 'o
   await ui.unmount()
 })
 
+test('a reset reads at its two largest units', () => {
+  const now = Date.parse('2026-10-03T10:00:00Z')
+  expect(['2026-10-03T11:20:00Z', '2026-10-06T14:00:00Z', '2026-10-03T10:12:00Z', '2026-10-03T12:00:00Z', '2026-10-03T09:00:00Z'].map(t => untilReset(t, now)))
+    .toEqual(['1h20m', '3d4h', '12m', '2h', '0m'])
+})
+
+test('usage limits show when each resets, unless resets is off', { options: { weather: 'off', ponytail: 'off', limits: 'on', agents: 'off' } }, async ($, on) => {
+  memStore(on)
+  on('config.list', () => ({ value: [] }))
+  on('clock.now', () => ({ value: Date.parse('2026-10-03T10:00:00Z') }))
+  const rateLimits = [{ kind: 'five_hour', percentUsed: 42, resetsAt: '2026-10-03T11:20:00Z' }, { kind: 'seven_day', percentUsed: 18.5, resetsAt: '2026-10-06T14:00:00Z' }]
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits } }))
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  expect(await textOf(ui)).toBe('5h 42% ↻1h20m · 7d 19% ↻3d4h')
+  await ui.press({ key: 'settings' })
+  await ui.press({ key: 'resets-off' })
+  await ui.press({ key: 'settings' })
+  expect(await textOf(ui)).toBe('5h 42% · 7d 19%')
+  await ui.unmount()
+})
+
+test('running agents show as a count that lists them', { options: { weather: 'off', ponytail: 'off', limits: 'off' } }, async ($, on) => {
+  memStore(on)
+  on('agent.list', () => ({
+    value: [
+      { id: 'a1', description: 'Search the repo for callers', type: 'Explore', status: 'running' },
+      { id: 'a2', description: 'Review the diff', type: 'code-reviewer', status: 'running' },
+      { id: 'a3', description: 'Done already', type: 'general-purpose', status: 'completed' },
+    ],
+  }))
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  expect((await ui.find({ key: 'agents' }))?.props.label).toBe('2 agents')
+  await ui.press({ key: 'agents' })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts).toContain('Agents running')
+  expect(texts).toContain('Search the repo for callers')
+  expect(texts).not.toContain('Done already')
+  await ui.unmount()
+})
+
 test('usage limits and session cost show as widgets when on', { options: { weather: 'off', ponytail: 'off', limits: 'on', cost: 'on' } }, async ($, on) => {
   memStore(on)
   const rateLimits = [{ kind: 'five_hour', percentUsed: 42 }, { kind: 'seven_day', percentUsed: 18.5 }]
@@ -523,4 +578,26 @@ test('failing MCP servers show as a count that opens the MCP errors box', { opti
   await ui.press({ key: 'mcp-dismiss-all' })
   expect(await label()).toBeUndefined()
   await ui.unmount()
+})
+
+test('widgets wrap onto further rows of their own box, leaving ⚙ on the first', async ($, on) => {
+  memStore(on)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 134400, window: 200000 }, rateLimits: [] } }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'overalls', surface, component: 'AbovePrompt', props: PROPS })
+    const boxes = (await ui.findAll({ type: 'Box' })).map(b => b.props)
+    expect(boxes.filter(b => b.flexWrap === 'wrap')).toHaveLength(1)
+    expect(boxes.filter(b => b.alignItems === 'flex-start')).toHaveLength(1) // ⚙ keeps to the top row
+    await ui.unmount()
+  }
+})
+
+test('the desktop sparkline is an Svg of bars rising from the bottom, coloured by fill', () => {
+  const svg = sparkSvg([{ tokens: 0, window: 100 }, { tokens: 50, window: 100 }, { tokens: 100, window: 100 }])
+  expect(svg).toContain('viewBox="0 0 15 14"')
+  expect(svg).toContain('<rect x="0" y="13" width="4" height="1"') // empty still shows
+  expect(svg).toContain('<rect x="5" y="7" width="4" height="7"')
+  expect(svg).toContain('<rect x="10" y="0" width="4" height="14"')
 })

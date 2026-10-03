@@ -3,6 +3,6 @@ export type McpTrouble = { why: string; detail: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    overalls: { history: Reading[]; ponytail: string; level: string; caveman: string; mcpDown: Record<string, McpTrouble>; panel: '' | 'config' | 'mcp' }
+    overalls: { history: Reading[]; ponytail: string; level: string; caveman: string; mcpDown: Record<string, McpTrouble>; panel: '' | 'config' | 'mcp' | 'agents' }
   }
 }

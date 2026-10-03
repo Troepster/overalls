@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -51,6 +51,12 @@
       "description": "Show how much of your 5-hour and weekly usage is spent: on or off",
       "default": "on"
     },
+    "resets": {
+      "type": "string",
+      "title": "Limit resets",
+      "description": "Show how long until each usage limit resets: on or off",
+      "default": "on"
+    },
     "cost": {
       "type": "string",
       "title": "Session cost",
@@ -61,6 +67,12 @@
       "type": "string",
       "title": "MCP warnings",
       "description": "Warn in the band when an MCP server or connector fails or needs signing in again: on or off",
+      "default": "on"
+    },
+    "agents": {
+      "type": "string",
+      "title": "Running agents",
+      "description": "Show how many subagents are running, and list them on press: on or off",
       "default": "on"
     }
   }
