@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="28" fill="#1f3a5f"/>
+  <!-- sun peeking over the bib -->
+  <circle cx="92" cy="36" r="14" fill="#f2b632"/>
+  <g stroke="#f2b632" stroke-width="5" stroke-linecap="round">
+    <line x1="92" y1="10" x2="92" y2="15"/>
+    <line x1="113" y1="36" x2="118" y2="36"/>
+    <line x1="107" y1="21" x2="111" y2="17"/>
+    <line x1="107" y1="51" x2="111" y2="55"/>
+  </g>
+  <!-- overalls: straps, bib, legs -->
+  <g fill="#7fb3e0">
+    <rect x="34" y="22" width="9" height="34" rx="4"/>
+    <rect x="71" y="22" width="9" height="34" rx="4"/>
+    <path d="M32 50h50v20l8 44H64l-7-30-7 30H24l8-44z"/>
+  </g>
+  <rect x="45" y="58" width="24" height="14" rx="3" fill="#1f3a5f"/>
+  <circle cx="38" cy="52" r="3.5" fill="#f2b632"/>
+  <circle cx="76" cy="52" r="3.5" fill="#f2b632"/>
+</svg>

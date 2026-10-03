@@ -58,6 +58,20 @@ What each weather level shows:
 Ponytail keeps one level file for all sessions, so if two sessions run at
 different levels, both bands show whichever was set most recently.
 
+## Data and access
+
+Overalls makes no network requests and sends nothing anywhere. Everything it
+does stays inside your Claude Code session:
+
+- reads the session's context-window usage (`$.session.usage()`) after each turn
+- reads your Claude Code settings to see whether Ponytail is enabled
+- reads one file, `.ponytail-active` in your Claude config directory, and the
+  `HOME` and `CLAUDE_CONFIG_DIR` environment variables to find it
+- keeps the last 12 readings in session state, which is gone when the session ends
+- compacts the conversation only when you press its **Compact** button
+
+It writes no files and runs no commands.
+
 ## Development
 
 Load your clone directly instead of the installed copy, so saves hot-reload:

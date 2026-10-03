@@ -1,12 +1,21 @@
 {
   "name": "overalls",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Status band above the prompt: context weather and Ponytail level",
   "author": {
     "name": "Troepster"
   },
   "homepage": "https://github.com/Troepster/overalls",
   "license": "MIT",
+  "icon": "./icon.svg",
+  "documentationUrl": "https://github.com/Troepster/overalls#readme",
+  "supportUrl": "https://github.com/Troepster/overalls/issues",
+  "keywords": [
+    "mod",
+    "context-window",
+    "status",
+    "ponytail"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "weather": {
