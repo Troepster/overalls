@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
