@@ -1,20 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <rect width="128" height="128" rx="28" fill="#1f3a5f"/>
-  <!-- sun peeking over the bib -->
-  <circle cx="92" cy="36" r="14" fill="#f2b632"/>
-  <g stroke="#f2b632" stroke-width="5" stroke-linecap="round">
-    <line x1="92" y1="10" x2="92" y2="15"/>
-    <line x1="113" y1="36" x2="118" y2="36"/>
-    <line x1="107" y1="21" x2="111" y2="17"/>
-    <line x1="107" y1="51" x2="111" y2="55"/>
-  </g>
-  <!-- overalls: straps, bib, legs -->
-  <g fill="#7fb3e0">
-    <rect x="34" y="22" width="9" height="34" rx="4"/>
-    <rect x="71" y="22" width="9" height="34" rx="4"/>
-    <path d="M32 50h50v20l8 44H64l-7-30-7 30H24l8-44z"/>
-  </g>
-  <rect x="45" y="58" width="24" height="14" rx="3" fill="#1f3a5f"/>
-  <circle cx="38" cy="52" r="3.5" fill="#f2b632"/>
-  <circle cx="76" cy="52" r="3.5" fill="#f2b632"/>
+  <!-- coverall: collar, long sleeves, legs -->
+  <path fill="#7fb3e0" stroke="#7fb3e0" stroke-width="3" stroke-linejoin="round"
+        d="M54 17 L64 25 L74 17 L89 23 L101 81 L91 83 L81 47 L84 114 L69 114 L64 70 L59 114 L44 114 L47 47 L37 83 L27 81 L39 23 Z"/>
+  <!-- zip and chest badge -->
+  <line x1="64" y1="26" x2="64" y2="66" stroke="#1f3a5f" stroke-width="2.5" stroke-linecap="round"/>
+  <ellipse cx="74" cy="36" rx="5" ry="3" fill="#ffffff"/>
 </svg>
