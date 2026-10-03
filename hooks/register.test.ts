@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { bar, caveMode, contrast, fmt, heat, hexToRgb, levelAfter, ponyMode, ponytailLabel, weather } from './register'
+import { bar, caveMode, contrast, fmt, heat, hexToRgb, levelAfter, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -297,7 +297,7 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Cost'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Cost', 'MCP'])
   await ui.unmount()
 })
 
@@ -461,4 +461,66 @@ test('the Config box offers Install for a plugin that is missing, as a request i
   expect(filled).toEqual([
     'Install the caveman Claude Code plugin: run `claude plugin marketplace add JuliusBrussee/caveman` then `claude plugin install caveman@caveman`.',
   ])
+})
+
+test('MCP trouble reads from tool names and error text', () => {
+  expect(['mcp__claude_ai_Gmail__search', 'mcp__plugin_productivity_atlassian__getJiraIssue', 'Bash'].map(mcpServer))
+    .toEqual(['claude_ai_Gmail', 'plugin_productivity_atlassian', ''])
+  expect(['claude_ai_Gmail', 'plugin_productivity_atlassian', '1a59c906-04da-521d-bda7-7f71b9f9e01c'].map(mcpLabel))
+    .toEqual(['Gmail', 'atlassian', 'connector 1a59c906'])
+  expect(['HTTP 401 Unauthorized', 'OAuth token has expired', 'MCP server not connected', 'connect ECONNREFUSED', 'Invalid arguments: query is required'].map(mcpTrouble))
+    .toEqual(['sign in', 'sign in', 'failed', 'failed', ''])
+})
+
+test('failing MCP servers show as a count that opens the MCP errors box', { options: { weather: 'off', ponytail: 'off', limits: 'off' } }, async ($, on) => {
+  memStore(on)
+  let answer: { isError: true; result: string; text: string } | { result: string; text: string } = { isError: true, result: '', text: 'HTTP 401\n Unauthorized' }
+  const failedSearch = { matches: [], query: 'x', total_deferred_tools: 0, failed_mcp_servers: [{ name: 'plugin_productivity_slack', error: 'connection refused' }] }
+  on('tool.call', (_$, e) => (e.tool === 'ToolSearch' ? { result: failedSearch as never, text: '' } : answer))
+  const ran: string[] = []
+  on('command.run', (_$, e) => (ran.push(e.command), { text: '' }))
+  let entrypoint = 'claude-desktop'
+  on('env.get', (_$, e) => ({ value: e.name === 'CLAUDE_CODE_ENTRYPOINT' ? entrypoint : undefined }))
+  const opened: string[][] = []
+  on('process.run', (_$, e) => (opened.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  const call = (tool: string) => $.tool.call({ tool, tool_use_id: 't' } as never)
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  const label = async () => (await ui.find({ key: 'mcp' }))?.props.label
+
+  await call('mcp__claude_ai_Gmail__search')
+  answer = { isError: true, result: '', text: 'Invalid arguments' } // a bad call is not the server's trouble
+  await call('mcp__claude_ai_Calendar__list')
+  expect(await label()).toBe('1 MCP error')
+  answer = { result: 'ok', text: 'ok' }
+  await call('mcp__claude_ai_Gmail__search') // answering again clears it
+  expect(await label()).toBeUndefined()
+
+  answer = { isError: true, result: '', text: 'OAuth token has expired' }
+  await call('mcp__claude_ai_Gmail__search')
+  await call('ToolSearch')
+  expect(await label()).toBe('2 MCP errors')
+
+  await ui.press({ key: 'mcp' }) // opens the box
+  const rows = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(rows).toContain('MCP errors')
+  expect(rows).toContain('OAuth token has expired')
+  expect(rows).toContain('connection refused')
+  // In the desktop app a claude.ai connector reconnects in the app's own Customize page; another
+  // server can't from there (its /mcp only lists). The CLI and the web link to claude.ai instead.
+  await ui.press({ key: 'mcp-reconnect-claude_ai_Gmail' })
+  expect(opened).toEqual([['open', 'claude://claude.ai/customize/connectors']])
+  await ui.press({ key: 'mcp-reconnect-plugin_productivity_slack' })
+  expect(ran).toEqual([])
+  entrypoint = 'cli'
+  const cli = await $.ui.mount({ plugin: 'overalls', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  expect((await cli.findAll({ type: 'Link' })).map(l => l.props.href)).toEqual(['https://claude.ai/customize/connectors'])
+  await cli.unmount()
+  await ui.press({ key: 'mcp-dismiss-plugin_productivity_slack' })
+  expect(await label()).toBe('1 MCP error')
+  await ui.press({ key: 'settings' }) // ⚙ swaps the box for Config
+  expect(await ui.find({ key: 'mcp-dismiss-all' })).toBeUndefined()
+  await ui.press({ key: 'mcp' })
+  await ui.press({ key: 'mcp-dismiss-all' })
+  expect(await label()).toBeUndefined()
+  await ui.unmount()
 })

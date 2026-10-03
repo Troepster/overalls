@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -56,6 +56,12 @@
       "title": "Session cost",
       "description": "Show what this session has cost so far: on or off",
       "default": "off"
+    },
+    "mcp": {
+      "type": "string",
+      "title": "MCP warnings",
+      "description": "Warn in the band when an MCP server or connector fails or needs signing in again: on or off",
+      "default": "on"
     }
   }
 }
