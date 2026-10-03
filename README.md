@@ -5,7 +5,7 @@ forecast" of the context window, how much of your usage limits is spent, and the
 level [Ponytail](https://github.com/DietrichGebert/ponytail) and
 [Caveman](https://github.com/JuliusBrussee/caveman) are running at.
 
-![The band in the desktop app: forecast, usage limits, session cost, and the Ponytail and Caveman dropdowns, with ⚙ at the right](assets/band.png)
+![The band in the desktop app: forecast, sparkline, last-turn change, usage limits, session cost, and the Ponytail and Caveman dropdowns, with ⚙ at the right](assets/band.png)
 
 Once the context passes 75% (and Claude isn't mid-turn), a **Compact** button
 appears in the band.
@@ -59,7 +59,7 @@ also works in the desktop app, where `/config` isn't available:
 /overalls            (shows the current values)
 ```
 
-![The Config box open above the band, with every choice for each setting and the current one ticked](assets/config-box.png)
+![The Config box open above the band: every choice for each setting in two columns, the current one ticked; below it the band, wrapped onto a second row](assets/config-box.png)
 
 The **⚙** at the right of the band opens a **Config** box above it with every
 choice for every setting, the current one ticked; pressing one sets it, so you
