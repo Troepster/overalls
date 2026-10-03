@@ -9,6 +9,8 @@ level [Ponytail](https://github.com/DietrichGebert/ponytail) and
 ☂ Showers 67% · 134.4k / 200k  ▂▆  ▲ +98.3k last turn  5h 42% · 7d 19%  🧑 full  🪨 caveman ⛏ 12.4k     ⚙
 ```
 
+![The band in the desktop app: forecast, usage limits, session cost, and the Ponytail and Caveman dropdowns, with ⚙ at the right](assets/band.png)
+
 (🧑 stands in for the Ponytail logo, which the band draws in its place: an image
 in the desktop app, and in terminals that can show pictures; elsewhere the word
 `ponytail:`.)
@@ -43,6 +45,8 @@ also works in the desktop app, where `/config` isn't available:
 /overalls ponytail off
 /overalls            (shows the current values)
 ```
+
+![The Config box open above the band, with every choice for each setting and the current one ticked](assets/config-box.png)
 
 The **⚙** at the right of the band opens a **Config** box above it with every
 choice for both settings, the current one ticked; pressing one sets it, so you
