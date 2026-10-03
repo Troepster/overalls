@@ -5,22 +5,14 @@ forecast" of the context window, how much of your usage limits is spent, and the
 level [Ponytail](https://github.com/DietrichGebert/ponytail) and
 [Caveman](https://github.com/JuliusBrussee/caveman) are running at.
 
-```
-☂ Showers 67% · 134.4k / 200k  ▂▆  ▲ +98.3k last turn  5h 42% · 7d 19%  🧑 full  🪨 caveman ⛏ 12.4k     ⚙
-```
-
 ![The band in the desktop app: forecast, usage limits, session cost, and the Ponytail and Caveman dropdowns, with ⚙ at the right](assets/band.png)
-
-(🧑 stands in for the Ponytail logo, which the band draws in its place: an image
-in the desktop app, and in terminals that can show pictures; elsewhere the word
-`ponytail:`.)
 
 Once the context passes 75% (and Claude isn't mid-turn), a **Compact** button
 appears in the band.
 
 ## Install
 
-In Claude Code:
+In the Claude Code terminal:
 
 ```
 /plugin marketplace add Troepster/overalls
@@ -28,15 +20,33 @@ In Claude Code:
 /reload-plugins
 ```
 
-If the band doesn't appear, restart Claude Code. Updates arrive with
-`/plugin marketplace update overalls`.
+Or from any shell, which also covers the desktop app (new sessions pick it up):
+
+```bash
+claude plugin marketplace add Troepster/overalls
+claude plugin install overalls@overalls
+```
+
+If the band doesn't appear, start a new session or restart Claude Code.
+
+To update: `/plugin marketplace update overalls` in Claude Code, or from a
+shell:
+
+```bash
+claude plugin marketplace update overalls
+claude plugin update overalls@overalls
+```
+
+Ponytail and Caveman are optional. Without Caveman its widget doesn't show;
+without Ponytail its widget reads `not installed` until you set it to `off`.
+Either way, the **⚙** Config box offers to install them.
 
 A mod runs inside Claude Code with the same access Claude Code has, so read
-`hooks/register.tsx` before installing — it's short.
+`hooks/register.tsx` before installing.
 
 ## Settings
 
-Both appear as rows in the Claude Code config menu under `overalls`; changing
+Each appears as a row in the Claude Code config menu under `overalls`; changing
 one reloads the mod. The `/overalls` command sets them from the prompt, which
 also works in the desktop app, where `/config` isn't available:
 
@@ -49,9 +59,9 @@ also works in the desktop app, where `/config` isn't available:
 ![The Config box open above the band, with every choice for each setting and the current one ticked](assets/config-box.png)
 
 The **⚙** at the right of the band opens a **Config** box above it with every
-choice for both settings, the current one ticked; pressing one sets it, so you
-see the change in the band as you make it. Press **⚙** again to close it. Hover over a setting's name in the Config
-box for a line on what it is.
+choice for every setting, the current one ticked; pressing one sets it, so you
+see the change in the band as you make it. Press **⚙** again to close it. Hover
+over a setting's name in the Config box for a line on what it is.
 
 Pressing the forecast itself (`Showers`, or `67%` at `minimal`) steps
 the weather detail through `minimal` → `normal` → `full` and round again; `off`
