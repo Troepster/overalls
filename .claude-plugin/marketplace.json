@@ -1,0 +1,14 @@
+{
+  "name": "overalls",
+  "owner": {
+    "name": "Troepster"
+  },
+  "description": "Claude Code mods by Troepster",
+  "plugins": [
+    {
+      "name": "overalls",
+      "source": "./",
+      "description": "Status band above the prompt: context weather and Ponytail level"
+    }
+  ]
+}

@@ -105,6 +105,7 @@ export const register: Register = (on, options) => {
   }
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId) return next(e) // main-loop turns only, not subagents
     const { context } = await $.session.usage()
     if (context.tokens !== undefined) {
       const reading = { tokens: context.tokens, window: context.window }

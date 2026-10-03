@@ -105,3 +105,20 @@ for (const [detail, expected] of [
     }
   })
 }
+
+test('subagent turns leave the forecast alone', { options: { weather: 'full', ponytail: false } }, async ($, on) => {
+  let tokens = 0
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.render', () => ({ tree: null }))
+  const turn = async (n: number, agentId?: string) => {
+    tokens = n
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer', agentId })
+  }
+  await turn(36100)
+  await turn(150000, 'sub-1')
+  await turn(134400)
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  expect(await textOf(ui)).toBe('☂ Showers 67% · 134.4k / 200k · ▂▆ · ▲ +98.3k last turn ')
+  await ui.unmount()
+})

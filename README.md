@@ -13,19 +13,19 @@ appears in the band.
 
 ## Install
 
-Clone the repo and point Claude Code at it, either per session:
+In Claude Code:
 
-```bash
-claude --plugin-dir ~/Projects/overalls
+```
+/plugin marketplace add Troepster/overalls
+/plugin install overalls@overalls
+/reload-plugins
 ```
 
-or for every session (including the desktop app), in `~/.claude/settings.json`:
+If the band doesn't appear, restart Claude Code. Updates arrive with
+`/plugin marketplace update overalls`.
 
-```json
-{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/Projects/overalls" } }
-```
-
-Saving a file in the folder reloads the mod in an interactive session.
+A mod runs inside Claude Code with the same access Claude Code has, so read
+`hooks/register.tsx` before installing — it's short.
 
 ## Settings
 
@@ -59,6 +59,20 @@ Ponytail keeps one level file for all sessions, so if two sessions run at
 different levels, both bands show whichever was set most recently.
 
 ## Development
+
+Load your clone directly instead of the installed copy, so saves hot-reload:
+
+```bash
+claude --plugin-dir ~/Projects/overalls
+```
+
+or for every session (including the desktop app), in `~/.claude/settings.json`:
+
+```json
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/Projects/overalls" } }
+```
+
+Don't also have the marketplace copy installed, or you'll get two bands.
 
 ```bash
 claude plugin validate .

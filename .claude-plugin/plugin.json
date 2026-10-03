@@ -1,14 +1,24 @@
 {
   "name": "overalls",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Status band above the prompt: context weather and Ponytail level",
+  "author": {
+    "name": "Troepster"
+  },
+  "homepage": "https://github.com/Troepster/overalls",
+  "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
     "weather": {
       "type": "string",
       "title": "Weather detail",
       "description": "How much of the context forecast to show",
-      "options": ["off", "minimal", "normal", "full"],
+      "options": [
+        "off",
+        "minimal",
+        "normal",
+        "full"
+      ],
       "default": "full"
     },
     "ponytail": {
