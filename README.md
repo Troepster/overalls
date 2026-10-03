@@ -80,6 +80,7 @@ you set the same setting with `/overalls` in a session that has the row.
 | Offer megacave | `on` · `off` | `off` | List Caveman's Classical Chinese mode (`megacave`) in its dropdown; in the Config box it sits on Caveman's row |
 | Usage limits | `on` · `off` | `on` | Show how much of your 5-hour and weekly limits is spent (subscriptions only) |
 | Session cost | `on` · `off` | `off` | Show what this session has cost so far |
+| MCP warnings | `on` · `off` | `on` | Warn when an MCP server or connector fails or needs signing in again |
 
 What each weather level shows:
 
@@ -139,6 +140,29 @@ prompt. A plugin's hooks start with the next session.
   megacave when **Offer megacave** is on, since it answers in Classical Chinese; on mobile a press steps through them), through Caveman's own
   `/megacave`, `/ultracave`, `/caveman` and `/caveman off` commands.
 
+## MCP warnings
+
+Claude Code gives a mod no list of MCP servers or their state, so the band learns
+of trouble from Claude's own tool calls:
+
+- an `mcp__<server>__…` call that fails to sign in or connect (a bad-arguments
+  error doesn't count), and
+- the servers a ToolSearch reports as failed.
+
+The band then shows `⚠ 2 MCP errors`. Pressing it opens an **MCP errors** box
+above the band (like the Config box; one is open at a time) with a row per
+server: its name, `sign in` or `failed`, the error as Claude saw it, and:
+
+- **Reconnect**: for a claude.ai connector, Customize → Connectors, opened in
+  the desktop app itself there (`claude://claude.ai/customize/connectors`), and
+  at `https://claude.ai/customize/connectors` from the CLI or the web. For any
+  other server, `/mcp` in the terminal; the desktop app's `/mcp` only lists
+  servers, so there it says to sign in from a terminal session.
+- **Dismiss**, and **Dismiss all**
+
+A server leaves the list on its next successful call, or when dismissed. It's
+caught on its first failure, not before.
+
 ## Data and access
 
 Overalls makes no network requests and sends nothing anywhere. Everything it
@@ -166,6 +190,15 @@ does stays inside your Claude Code session:
 - types an install request into the prompt box only when you press **Install**
   in the Config box; nothing is installed unless you send it and approve
   Claude's commands
+- reads the name of each MCP tool Claude calls, the error text when one fails,
+  and the failed-server list a ToolSearch returns, keeping only each failing
+  server's name, whether it needs signing in or failed, and the first 100
+  characters of its error; it runs `/mcp` only when you press **Reconnect** in the terminal
+- reads `CLAUDE_CODE_ENTRYPOINT` while the MCP errors box is open, to tell the
+  desktop app from the CLI and the web; in the desktop app, pressing
+  **Reconnect** on a connector hands `claude://claude.ai/customize/connectors` to
+  the system's opener (`open` on macOS, `xdg-open` on Linux, `cmd /c start` on
+  Windows), which opens that page in the app
 - compacts the conversation only when you press its **Compact** button; where
   Claude Code doesn't let a plugin compact (the desktop app), that press runs
   `/compact` for you, or types it into the prompt box if it can't run it
@@ -176,10 +209,12 @@ does stays inside your Claude Code session:
   store, a small JSON file Claude Code keeps for the plugin in your Claude config
   directory.
 
-Apart from that store, it writes no files, and it runs no shell commands.
+Apart from that store, it writes no files, and the only program it starts is that
+system opener, with that one fixed address, when you press **Reconnect**.
 
-It hooks three events only to observe them, never changing what they carry:
-`turn.complete` (take a reading), `session.compact` (record the drop after a
+It hooks four events only to observe them, never changing what they carry:
+`tool.call` (note an MCP server failing or answering again), `turn.complete`
+(take a reading), `session.compact` (record the drop after a
 compaction, and reset the Ponytail level to its default) and `prompt.submit`
 (note a Ponytail switch once your prompt has gone in, so `/ponytail lite` shows
 straight away). It also draws the band above

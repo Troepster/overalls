@@ -1,21 +1,23 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Reading } from '../types'
+import type { McpTrouble, Reading } from '../types'
 import { PONYTAIL_PNG } from './ponytail-icon'
 
 const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Reading[])
 const ponytail = atom({ plugin: 'overalls', key: 'ponytail' } as const, '')
 const level = atom({ plugin: 'overalls', key: 'level' } as const, '')
 const caveman = atom({ plugin: 'overalls', key: 'caveman' } as const, '')
-const configOpen = atom({ plugin: 'overalls', key: 'configOpen' } as const, false)
+const mcpDown = atom({ plugin: 'overalls', key: 'mcpDown' } as const, {} as Record<string, McpTrouble>)
+// Which box is open above the band, if any: ⚙'s Config box or the MCP errors box. One at a time.
+const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp')
 
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
 const PONY = ['off', 'icon', 'text'] as const
 const ONOFF = ['on', 'off'] as const
 // Every setting and what it takes, in /overalls, the Config box and userConfig alike.
-const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, cost: ONOFF } as const
+const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, cost: ONOFF, mcp: ONOFF } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
@@ -27,6 +29,7 @@ const TIPS = {
   'cfg-megacave': 'Megacave: offer Caveman\'s Classical Chinese mode in its dropdown',
   'cfg-limits': 'Limits: how much of your 5-hour and weekly usage is spent',
   'cfg-cost': 'Cost: what this session has cost so far',
+  'cfg-mcp': 'MCP: a warning when an MCP server or connector fails or needs signing in again',
 } as const
 const USAGE = Object.entries(FIELDS).map(([f, vs]) => `${f} ${vs.join('|')}`).join(' · ')
 
@@ -153,6 +156,59 @@ async function switchCaveman($: EngineInterface, mode: string) {
   }
 }
 
+// No API lists MCP servers or their state, so the band learns of trouble from Claude's own tool
+// calls: an `mcp__<server>__*` call that fails to sign in or connect, or the servers a ToolSearch
+// reports as failed. A server's next successful call clears it.
+export const mcpServer = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__')[1] ?? '' : '')
+export const mcpTrouble = (text: string) =>
+  /unauthori[sz]ed|\b40[13]\b|auth(entication|orization)? (required|failed|expired)|sign(ed)? ?in|log(ged)? ?in|re-?auth|oauth|token (has )?(expired|invalid|revoked)|invalid[_ ]token/i.test(text) ? 'sign in'
+  : /not connected|disconnected|failed to connect|connection (closed|refused|reset|lost)|econn|etimedout|timed out|server (is )?unavailable|no such server|not found: server/i.test(text) ? 'failed'
+  : ''
+// A claude.ai connector is named claude_ai_<Name>, or by its id; it's signed in from claude.ai.
+export const isConnector = (server: string) => /^claude_ai_/.test(server) || /^[0-9a-f]{8}-/.test(server)
+// Customize › Connectors, as Claude's support article links it (support.claude.com/en/articles/11176164);
+// the old /settings/connectors only says they moved.
+export const CONNECTORS_URL = 'https://claude.ai/customize/connectors'
+// The desktop app (CLAUDE_CODE_ENTRYPOINT=claude-desktop) opens the same page in itself from its
+// claude:// scheme (claude://claude.ai/<path>), which a Link can't carry (https only), so there it
+// goes to the system's opener; the CLI and the web get the https link, the web's own site.
+const CONNECTORS_APP_URL = 'claude://claude.ai/customize/connectors'
+const OPENERS = [['open'], ['xdg-open'], ['cmd', '/c', 'start', '']] // macOS, Linux, Windows
+async function openConnectors($: EngineInterface) {
+  for (const opener of OPENERS) {
+    const r = await $.process.run([...opener, CONNECTORS_APP_URL]).catch(() => undefined)
+    if (r?.exitCode === 0) return
+  }
+  $.ui.toast(`Sign the connector back in at ${CONNECTORS_URL}`)
+}
+
+// claude_ai_Gmail → Gmail, plugin_productivity_atlassian → atlassian; a connector id is cut short.
+export const mcpLabel = (server: string) => {
+  const name = server.replace(/^claude_ai_/, '').replace(/^plugin_[^_]+_/, '').replace(/_/g, ' ')
+  return /^[0-9a-f]{8}-/.test(name) ? `connector ${name.slice(0, 8)}` : name
+}
+
+// Any other server signs in through /mcp's menu, which the terminal has; the desktop app's /mcp
+// only prints a count. The entry stays until the server answers or is dismissed.
+async function reconnectMcp($: EngineInterface, surface: string, server: string) {
+  if (surface !== 'terminal') {
+    $.ui.toast(`Sign ${mcpLabel(server)} in with /mcp in a terminal session (claude): the desktop app's /mcp only lists servers`)
+    return
+  }
+  const ran = await $.command.run({ command: 'mcp' }).then(() => true, () => false)
+  if (!ran) $.ui.toast(`Reconnect ${mcpLabel(server)} with /mcp`)
+}
+
+const dismissMcp = ($: EngineInterface, server?: string) =>
+  update($, mcpDown, prev => {
+    if (server === undefined) return {}
+    const { [server]: _, ...rest } = prev
+    return rest
+  })
+
+// The error as Claude saw it, on one line and cut short.
+const detailOf = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 100)
+
 export const weather = (percent: number) =>
   percent < 25 ? { icon: '☀', word: 'Clear' }
   : percent < 50 ? { icon: '☁', word: 'Cloudy' }
@@ -235,6 +291,7 @@ async function prefs($: EngineInterface, options: Options) {
     megacave: pick('megacave') === 'on',
     limits: pick('limits') !== 'off',
     cost: pick('cost') === 'on',
+    mcp: pick('mcp') !== 'off',
   }
 }
 
@@ -272,7 +329,7 @@ export const register: Register = (on, options) => {
     const value = field in FIELDS && (FIELDS[field as Field] as readonly string[]).includes(arg) ? arg : undefined
     if (value === undefined) {
       const p = await prefs($, options)
-      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}`
+      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
       return { text: `Overalls ${now}\nUsage: /overalls ${USAGE}` }
     }
     const deny = await setPref($, options, field, value)
@@ -286,6 +343,34 @@ export const register: Register = (on, options) => {
     const to = levelAfter(e.text)
     if (to) await update($, level, () => to === 'default' ? '' : to) // '' reads the default afresh
     await refreshPonytail($, options)
+    return result
+  })
+
+  // Observed only: the result goes on as it came.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    const server = mcpServer(e.tool)
+    if (server) {
+      const text = result.isError ? result.text ?? String(result.result ?? '') : ''
+      const why = mcpTrouble(text)
+      if (why) await update($, mcpDown, prev => ({ ...prev, [server]: { why, detail: detailOf(text) } }))
+      else if (!result.isError && !('deny' in result && result.deny)) {
+        await update($, mcpDown, prev => {
+          const { [server]: _, ...rest } = prev
+          return server in prev ? rest : prev
+        })
+      }
+    } else if (e.tool === 'ToolSearch' && !result.isError && result.result) {
+      const failed = (result.result as { failed_mcp_servers?: { name: string; error?: string }[] }).failed_mcp_servers ?? []
+      if (failed.length) {
+        await update($, mcpDown, prev => ({
+          ...prev,
+          ...Object.fromEntries(
+            failed.map(f => [f.name, { why: mcpTrouble(f.error ?? '') || 'failed', detail: detailOf(f.error ?? '') }]),
+          ),
+        }))
+      }
+    }
     return result
   })
 
@@ -314,7 +399,8 @@ export const register: Register = (on, options) => {
 
   // Don't name a local `h`: JSX compiles to the global h().
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, cost } = await prefs($, options)
+    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, cost, mcp } = await prefs($, options)
+    const down = mcp ? Object.entries(await read($, mcpDown)) : []
     const readings = detail === 'off' ? [] : await read($, history)
     const pony = ponyAs !== 'off' ? await read($, ponytail) : ''
     const cave = caveAs !== 'off' ? await read($, caveman) : ''
@@ -322,7 +408,7 @@ export const register: Register = (on, options) => {
     // With nothing else to show, ⚙ still draws alone, so both turned off can be turned on again.
     if (e.props.hasSurvey) return next(e)
     const els = $.ui.resolve(e)
-    const { Box, Button, Text } = els
+    const { Box, Button, Link, Text } = els
     // Widgets sit a gap apart; the spacer after them takes the slack, so ⚙ (and Compact) keep
     // to the right.
     const widget = (...children: ReturnType<typeof Text>[]) => <Box flexDirection="row">{...children}</Box>
@@ -405,7 +491,22 @@ export const register: Register = (on, options) => {
         : []),
       ...(cost && usage?.cost ? [widget(<Text dimColor>${usage.cost.usd.toFixed(2)}</Text>)] : []),
     ]
-    const ponySegment = [...usageSegments, ...(pony ? [widget(ponyIcon, level)] : []), ...caveSegment]
+    // Only while something is down: a count that opens the MCP errors box.
+    const mcpSegment = down.length
+      ? [
+          widget(
+            <Text color={heat(100)}>⚠ </Text>,
+            <Button
+              key="mcp"
+              label={`${down.length} MCP error${down.length === 1 ? '' : 's'}`}
+              plain
+              hover={{ scope: 'mcp', underline: true }}
+              onPress={() => void update($, panel, p => (p === 'mcp' ? '' : 'mcp'))}
+            />,
+          ),
+        ]
+      : []
+    const ponySegment = [...mcpSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, level)] : []), ...caveSegment]
     // No tooltip prop: each card is drawn hidden over the Config box's blank row, revealed by its
     // hover scope.
     const tip = (scope: keyof typeof TIPS) => (
@@ -430,7 +531,8 @@ export const register: Register = (on, options) => {
         {...choices.flatMap(c => [c, <Text>  </Text>])}
       </Box>
     )
-    const open = await read($, configOpen)
+    const shown = await read($, panel)
+    const open = shown === 'config'
     // The Config box offers Install on a plugin's row where it isn't installed.
     const missing = async (plugin: keyof typeof SOURCES) => open && !(await isInstalled($, plugin).catch(() => true))
     const install = async (plugin: keyof typeof SOURCES) =>
@@ -441,13 +543,49 @@ export const register: Register = (on, options) => {
     const settings = (
       // A Button takes no bold: while the row is open ⚙ is drawn as the primary button instead.
       open ? (
-        <Button key="settings" label="⚙" variant="primary" onPress={() => void update($, configOpen, o => !o)} />
+        <Button key="settings" label="⚙" variant="primary" onPress={() => void update($, panel, p => (p === 'config' ? '' : 'config'))} />
       ) : (
-        <Button key="settings" label="⚙" plain dimColor onPress={() => void update($, configOpen, o => !o)} />
+        <Button key="settings" label="⚙" plain dimColor onPress={() => void update($, panel, p => (p === 'config' ? '' : 'config'))} />
       )
     )
+    const inApp = shown === 'mcp' && (await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined)) === 'claude-desktop'
+    // One row per failing server: its name, why, the error as Claude saw it, and what to do.
+    const mcpBox = (
+      <Box flexDirection="column" borderStyle="round" borderColor={heat(100)} paddingX={1} marginBottom={1}>
+        <Box flexDirection="row">
+          <Text bold>MCP errors</Text>
+          <Box flexDirection="row" flexGrow={1} />
+          <Button key="mcp-dismiss-all" label="Dismiss all" plain dimColor onPress={() => void dismissMcp($)} />
+        </Box>
+        <Text> </Text>
+        {...down.map(([server, t]) => (
+          <Box flexDirection="row" gap={2}>
+            <Box flexDirection="row" width={14}>
+              <Text>{mcpLabel(server)}</Text>
+            </Box>
+            <Text color={heat(100)}>{t.why}</Text>
+            <Box flexDirection="row" flexGrow={1} flexShrink={1}>
+              <Text dimColor>{t.detail}</Text>
+            </Box>
+            {isConnector(server) && inApp ? (
+              <Button key={`mcp-reconnect-${server}`} label="Reconnect" plain onPress={() => void openConnectors($)} />
+            ) : isConnector(server) ? (
+              <Link href={CONNECTORS_URL} label="Reconnect" />
+            ) : (
+              <Button key={`mcp-reconnect-${server}`} label="Reconnect" plain onPress={() => void reconnectMcp($, e.surface ?? '', server)} />
+            )}
+            <Button key={`mcp-dismiss-${server}`} label="Dismiss" plain dimColor onPress={() => void dismissMcp($, server)} />
+          </Box>
+        ))}
+      </Box>
+    )
     const withPanel = (band: ReturnType<typeof Box>) =>
-      !open ? band : (
+      shown === 'mcp' && down.length ? (
+        <Box flexDirection="column" width="100%">
+          {mcpBox}
+          {band}
+        </Box>
+      ) : !open ? band : (
         <Box flexDirection="column" width="100%">
           <Box flexDirection="column" borderStyle="round" paddingX={1} marginBottom={1}>
             <Text bold>Config</Text>
@@ -467,6 +605,7 @@ export const register: Register = (on, options) => {
             ])}
             {setting('limits', 'Limits', ONOFF.map(m => choice('limits', m, (m === 'on') === limits)))}
             {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
+            {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
           </Box>
           {band}
         </Box>
