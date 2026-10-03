@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { bar, contrast, fmt, heat, hexToRgb, ponytailLabel, weather } from './register.tsx'
+import { bar, contrast, fmt, heat, hexToRgb, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -11,7 +11,7 @@ test('forecast helpers', () => {
   expect([0, 100000, 199999, 200000].map(tokens => bar({ tokens, window: 200000 })).join('')).toBe('▁▅██')
 })
 
-const PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 }
+const PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} }
 
 // WCAG 1.4.11: coloured glyphs (icon, bars) need 3:1 against the background.
 // Light: white, off-white. Dark: black, VS Code/terminal greys, desktop dark.
@@ -25,8 +25,6 @@ test('a11y: every heat colour keeps 3:1 on light and dark backgrounds', () => {
       worst[bg] = Math.min(worst[bg] ?? Infinity, ratio)
     }
   }
-  console.log([0, 25, 50, 75, 100].map(p => `${p}%=${heat(p)}`).join(' '))
-  console.log(Object.entries(worst).map(([bg, r]) => `${bg} ${r.toFixed(2)}:1`).join('  '))
   for (const r of Object.values(worst)) expect(r).toBeGreaterThanOrEqual(3)
   expect(heat(0)).toMatch(/^#00[0-9a-f]{2}00$/)
   expect(heat(100)).toMatch(/^#[0-9a-f]{2}0000$/)
@@ -38,7 +36,6 @@ test('band draws, offers Compact from 75%, and records the drop', async ($, on) 
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
   on('turn.complete', () => ({ text: '' }))
   on('session.compact', () => (compacted++, { messages: [{ role: 'user' as const, text: 'summary', toolUses: [] }], tokensAfter: 20000 }))
-  on('ui.render', () => ({ tree: null }))
   const turn = async (n: number) => {
     tokens = n
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer' })
@@ -92,8 +89,7 @@ for (const [detail, expected] of [
     on('turn.complete', () => ({ text: '' }))
     on('settings.read', () => ({ value: { enabledPlugins: { 'ponytail@ponytail': true } } }))
     on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
-    on('fs.read', (_$, e) => (e.path === '/home/u/.claude/.ponytail-active' ? { value: 'ultra\n' } : { error: 'ENOENT' }))
-    on('ui.render', () => ({ tree: null }))
+    on('fs.read', (_$, e) => (e.path === '/home/u/.claude/.ponytail-active' ? { value: 'ultra\n' } : { deny: 'ENOENT' }))
     for (const n of [36100, 134400]) {
       tokens = n
       await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer' })
@@ -101,6 +97,9 @@ for (const [detail, expected] of [
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ plugin: 'overalls', surface, component: 'AbovePrompt', props: PROPS })
       expect(await textOf(ui)).toBe(expected)
+      // One line: Box's default direction differs by surface (desktop stacks), so every Box says row.
+      const dirs = (await ui.findAll({ type: 'Box' })).map(b => b.props.flexDirection)
+      expect(dirs.filter(d => d !== 'row')).toEqual([])
       await ui.unmount()
     }
   })
@@ -110,7 +109,6 @@ test('subagent turns leave the forecast alone', { options: { weather: 'full', po
   let tokens = 0
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
   on('turn.complete', () => ({ text: '' }))
-  on('ui.render', () => ({ tree: null }))
   const turn = async (n: number, agentId?: string) => {
     tokens = n
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer', agentId })
@@ -128,7 +126,6 @@ for (const [typed, expected] of [['Minimal', '☂ 67% '], [' NORMAL ', '☂ Show
     let tokens = 0
     on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
     on('turn.complete', () => ({ text: '' }))
-    on('ui.render', () => ({ tree: null }))
     for (const n of [36100, 134400]) {
       tokens = n
       await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer' })

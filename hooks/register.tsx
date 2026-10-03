@@ -43,12 +43,12 @@ const hsl = (hue: number, l: number) => {
 
 // WCAG relative luminance of an sRGB triple in 0..1.
 export const luminance = (rgb: number[]) => {
-  const [r, g, b] = rgb.map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+  const [r = 0, g = 0, b = 0] = rgb.map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 export const contrast = (a: number[], b: number[]) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  const [hi = 0, lo = 0] = [luminance(a), luminance(b)].sort((x, y) => y - x)
   return (hi + 0.05) / (lo + 0.05)
 }
 
@@ -120,7 +120,7 @@ export const register: Register = (on, options) => {
   // Any compaction records the drop at once rather than next turn.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
-    if (!result.skip) await recordDrop($, result.tokensAfter)
+    if (result.messages) await recordDrop($, result.tokensAfter)
     return result
   })
 
@@ -131,17 +131,17 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || (readings.length === 0 && !pony)) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const ponySegment = pony && <Text dimColor>{readings.length ? ' · ' : ''}ponytail: {pony}</Text>
-    if (readings.length === 0) return <Box>{ponySegment}</Box>
+    const now = readings.at(-1)
+    if (!now) return <Box flexDirection="row">{ponySegment}</Box>
 
-    const now = readings[readings.length - 1]
     const percent = Math.round(pct(now))
     const w = weather(percent)
-    const delta = readings.length > 1 ? now.tokens - readings[readings.length - 2].tokens : now.tokens
+    const delta = now.tokens - (readings.at(-2)?.tokens ?? 0)
 
     const compact = async () => {
       try {
         const r = await $.session.compact()
-        if (r.skip) $.ui.toast(`Compact skipped: ${r.skip}`)
+        if (r.skip !== undefined) $.ui.toast(`Compact skipped: ${r.skip}`)
         else await recordDrop($, r.tokensAfter)
       } catch (err) {
         $.ui.toast(`Couldn't compact: ${err instanceof Error ? err.message : err}`)
@@ -149,23 +149,18 @@ export const register: Register = (on, options) => {
     }
 
     return (
-      <Box>
+      <Box flexDirection="row">
         <Text color={heat(percent)}>{w.icon}</Text>
-        {detail === 'minimal' ? (
-          <Text> {percent}%</Text>
-        ) : (
-          <>
-            <Text bold> {w.word}</Text>
-            <Text> {percent}% · {fmt(now.tokens)} / {fmt(now.window)}</Text>
-          </>
-        )}
-        {detail === 'full' && (
-          <>
-            <Text> · </Text>
-            {readings.map(r => <Text color={heat(pct(r))}>{bar(r)}</Text>)}
-            <Text dimColor> · {delta >= 0 ? '▲ +' : '▼ -'}{fmt(Math.abs(delta))} last turn</Text>
-          </>
-        )}
+        {...(detail === 'minimal'
+          ? [<Text> {percent}%</Text>]
+          : [<Text bold> {w.word}</Text>, <Text> {percent}% · {fmt(now.tokens)} / {fmt(now.window)}</Text>])}
+        {...(detail === 'full'
+          ? [
+              <Text> · </Text>,
+              ...readings.map(r => <Text color={heat(pct(r))}>{bar(r)}</Text>),
+              <Text dimColor> · {delta >= 0 ? '▲ +' : '▼ -'}{fmt(Math.abs(delta))} last turn</Text>,
+            ]
+          : [])}
         {ponySegment}
         <Text> </Text>
         {percent >= COMPACT_AT && !e.props.isWorking && (
