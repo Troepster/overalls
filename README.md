@@ -30,7 +30,22 @@ A mod runs inside Claude Code with the same access Claude Code has, so read
 ## Settings
 
 Both appear as rows in the Claude Code config menu under `overalls`; changing
-one reloads the mod.
+one reloads the mod. The `/overalls` command sets them from the prompt, which
+also works in the desktop app, where `/config` isn't available:
+
+```
+/overalls weather minimal
+/overalls ponytail off
+/overalls            (shows the current values)
+```
+
+The **⚙** button at the end of the band types `/overalls ` into the prompt box
+for you.
+
+Where the mod has a `/config` row (the terminal), `/overalls` sets that row.
+Where it has none (the desktop app), it keeps the choice in the mod's own store
+instead, and that choice wins over the `/config` value in every session until
+you set the same setting with `/overalls` in a session that has the row.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
@@ -74,8 +89,14 @@ does stays inside your Claude Code session:
   `HOME` and `CLAUDE_CONFIG_DIR` environment variables to find it
 - keeps the last 12 readings in session state, which is gone when the session ends
 - compacts the conversation only when you press its **Compact** button
+- changes its own two settings only when you run `/overalls weather …` or
+  `/overalls ponytail …`: through the `/config` row where there is one (saved in
+  your Claude Code settings, as `/config` saves them), otherwise in the mod's own
+  store, a small JSON file Claude Code keeps for the plugin in your Claude config
+  directory
+- types `/overalls ` into the prompt box only when you press its **⚙** button
 
-It writes no files and runs no commands.
+Apart from that store, it writes no files, and it runs no shell commands.
 
 It hooks three events only to observe them, never changing what they carry:
 `turn.complete` (take a reading), `session.compact` (record the drop after a
