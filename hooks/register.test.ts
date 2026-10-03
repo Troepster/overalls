@@ -1,4 +1,5 @@
 import { test, expect } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 
 import { bar, contrast, fmt, heat, hexToRgb, ponytailLabel, weather } from './register'
 
@@ -10,6 +11,14 @@ test('forecast helpers', () => {
   expect(fmt(1000000)).toBe('1M')
   expect([0, 100000, 199999, 200000].map(tokens => bar({ tokens, window: 200000 })).join('')).toBe('▁▅██')
 })
+
+// The test kit keeps no store: an in-memory one per test, returned so a test can read it.
+const memStore = (on: Parameters<TestBody>[1]) => {
+  const store: Record<string, unknown> = {}
+  on('store.get', (_$, e) => ({ value: store[e.key] }))
+  on('store.set', (_$, e) => ((store[e.key] = JSON.parse(JSON.stringify(e.value))), { value: undefined }))
+  return store
+}
 
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} }
 
@@ -31,6 +40,7 @@ test('a11y: every heat colour keeps 3:1 on light and dark backgrounds', () => {
 })
 
 test('band draws, offers Compact from 75%, and records the drop', async ($, on) => {
+  const store = memStore(on)
   let tokens = 0
   let compacted = 0
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
@@ -81,9 +91,10 @@ for (const [detail, expected] of [
   ['minimal', '☂ 67% · ponytail: ultra '],
   ['normal', '☂ Showers 67% · 134.4k / 200k · ponytail: ultra '],
   ['full', '☂ Showers 67% · 134.4k / 200k · ▂▆ · ▲ +98.3k last turn · ponytail: ultra '],
-  ['off', 'ponytail: ultra'],
+  ['off', 'ponytail: ultra '],
 ] as const) {
   test(`weather=${detail} with ponytail installed`, { options: { weather: detail, ponytail: true } }, async ($, on) => {
+  const store = memStore(on)
     let tokens = 0
     on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
     on('turn.complete', () => ({ text: '' }))
@@ -106,6 +117,7 @@ for (const [detail, expected] of [
 }
 
 test('subagent turns leave the forecast alone', { options: { weather: 'full', ponytail: false } }, async ($, on) => {
+  const store = memStore(on)
   let tokens = 0
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
   on('turn.complete', () => ({ text: '' }))
@@ -123,6 +135,7 @@ test('subagent turns leave the forecast alone', { options: { weather: 'full', po
 
 for (const [typed, expected] of [['Minimal', '☂ 67% '], [' NORMAL ', '☂ Showers 67% · 134.4k / 200k '], ['bogus', '☂ Showers 67% · 134.4k / 200k · ▂▆ · ▲ +98.3k last turn ']] as const) {
   test(`weather typed as ${JSON.stringify(typed)}`, { options: { weather: typed, ponytail: false } }, async ($, on) => {
+  const store = memStore(on)
     let tokens = 0
     on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
     on('turn.complete', () => ({ text: '' }))
@@ -135,3 +148,57 @@ for (const [typed, expected] of [['Minimal', '☂ 67% '], [' NORMAL ', '☂ Show
     await ui.unmount()
   })
 }
+
+test('/overalls sets the config row, and ⚙ starts the command', { options: { weather: 'full', ponytail: false } }, async ($, on) => {
+  const store = memStore(on)
+  // A --plugin-dir load names its rows `overalls@inline.<field>`, not `overalls.<field>`.
+  const row = (field: string, kind: 'text' | 'boolean', value: string | boolean) =>
+    ({ key: `overalls@inline.${field}`, label: field, kind, value, provider: { plugin: 'overalls', tier: 'user' as const }, isLocked: false })
+  on('config.list', () => ({ value: [row('weather', 'text', 'full'), row('ponytail', 'boolean', true), { ...row('x', 'text', ''), key: 'theme' }] }))
+  const sets: unknown[] = []
+  on('config.set', (_$, e) => (sets.push([e.key, e.value]), { value: e.value }))
+  const filled: string[] = []
+  on('prompt.fill', (_$, e) => (filled.push(e.text), { isFilled: true, text: e.text, cursor: e.text.length }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 36100, window: 200000 }, rateLimits: [] } }))
+  on('turn.complete', () => ({ text: '' }))
+  const registered: string[] = []
+  on('command.register', (_$, e) => (registered.push(e.name), { value: { command: e.name } }))
+  on('session.start', (_$, e) => e)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(registered).toEqual(['overalls'])
+
+  const run = async (args: string) => (await $.command.run({ command: 'overalls', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })).text
+  expect(await run('weather Minimal')).toBe('Overalls weather: minimal')
+  expect(await run('ponytail off')).toBe('Overalls ponytail: off')
+  expect(await run('weather sunny')).toContain('Usage: /overalls weather off|minimal|normal|full')
+  expect(sets).toEqual([['overalls@inline.weather', 'minimal'], ['overalls@inline.ponytail', false]])
+  expect(store.prefs).toEqual({}) // the row holds it, so nothing is kept beside it
+
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'overalls', surface, component: 'AbovePrompt', props: PROPS })
+    await ui.press({ key: 'settings' })
+    await ui.unmount()
+  }
+  expect(filled).toEqual(['/overalls ', '/overalls '])
+})
+
+test('/overalls without a /config row (desktop) keeps the choice in the store', { options: { weather: 'full', ponytail: false } }, async ($, on) => {
+  const store = memStore(on)
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'text' as const, value: 'dark', provider: { plugin: 'engine', tier: 'core' as const }, isLocked: false }] }))
+  on('config.set', () => { throw new Error('no row to set') })
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 134400, window: 200000 }, rateLimits: [] } }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  const run = async (args: string) =>
+    (await $.command.run({ command: 'overalls', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })).text
+  expect(await run('weather minimal')).toBe('Overalls weather: minimal')
+  expect(store.prefs).toEqual({ weather: 'minimal' })
+  expect(await run('')).toContain('Overalls weather: minimal, ponytail: off')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'overalls', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await textOf(ui)).toBe('☂ 67% ')
+    await ui.unmount()
+  }
+})

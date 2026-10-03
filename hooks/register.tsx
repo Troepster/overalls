@@ -9,6 +9,7 @@ const ponytail = atom({ plugin: 'overalls', key: 'ponytail' } as const, '')
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
 const COMPACT_AT = 75
+const USAGE = 'weather off|minimal|normal|full · ponytail on|off'
 
 // Ponytail writes its level to <claude dir>/.ponytail-active and deletes it when off.
 // ponytail: one global file, so concurrent sessions show the last level set anywhere.
@@ -88,23 +89,64 @@ async function recordDrop($: EngineInterface, tokensAfter?: number) {
   })
 }
 
-export const register: Register = (on, options) => {
-  // A typed field, not a picker: the directory doesn't accept userConfig `options` yet.
-  const detail = DETAILS.find(d => d === String(options.weather).trim().toLowerCase()) ?? 'full'
-  const showPonytail = options.ponytail === true
+type Prefs = { weather?: string; ponytail?: boolean }
+type Options = Parameters<Register>[1]
 
-  if (showPonytail) {
-    on('session.start', async ($, e, next) => {
-      await readPonytail($)
-      return next(e)
-    })
-    // `/ponytail lite` and "stop ponytail" take effect as the prompt goes in.
-    on('prompt.submit', async ($, e, next) => {
-      const result = await next(e)
-      await readPonytail($)
-      return result
-    })
+// /overalls choices made where the mod has no /config row (the desktop app) live in its
+// store and win over userConfig. A typed field, not a picker: the directory doesn't accept
+// userConfig `options` yet.
+async function prefs($: EngineInterface, options: Options) {
+  const saved = ((await $.store.get('prefs')) ?? {}) as Prefs
+  return {
+    detail: DETAILS.find(d => d === String(saved.weather ?? options.weather).trim().toLowerCase()) ?? 'full',
+    showPonytail: (saved.ponytail ?? options.ponytail) === true,
   }
+}
+
+async function refreshPonytail($: EngineInterface, options: Options) {
+  if ((await prefs($, options)).showPonytail) await readPonytail($)
+}
+
+export const register: Register = (on, options) => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({ name: 'overalls', description: 'Set the Overalls band', argumentHint: USAGE })
+    await refreshPonytail($, options)
+    return next(e)
+  })
+
+  on('command.run', { command: 'overalls' }, async ($, e) => {
+    const [field = '', arg = ''] = e.args.trim().toLowerCase().split(/\s+/)
+    const value =
+      field === 'weather' && (DETAILS as readonly string[]).includes(arg) ? arg
+      : field === 'ponytail' && (arg === 'on' || arg === 'off') ? arg === 'on'
+      : undefined
+    if (value === undefined) {
+      const p = await prefs($, options)
+      return { text: `Overalls weather: ${p.detail}, ponytail: ${p.showPonytail ? 'on' : 'off'}\nUsage: /overalls ${USAGE}` }
+    }
+    // Where the mod has a /config row (the terminal), set that and drop any stored choice;
+    // the engine saves the row and reloads this module with it.
+    const row = (await $.config.list()).find(
+      r => r.provider.plugin.split('@')[0] === 'overalls' && (r.key === field || r.key.endsWith(`.${field}`)),
+    )
+    const saved = ((await $.store.get('prefs')) ?? {}) as Record<string, unknown>
+    await $.store.set('prefs', row ? { ...saved, [field]: undefined } : { ...saved, [field]: value })
+    if (row) {
+      const r = await $.config.set({ key: row.key, value }).catch((err: unknown) => ({ deny: String(err) }))
+      if (r.deny) return { text: `Couldn't set ${field}: ${r.deny}` }
+    } else {
+      await refreshPonytail($, options)
+      $.ui.invalidate('ui.render')
+    }
+    return { text: `Overalls ${field}: ${value === true ? 'on' : value === false ? 'off' : value}` }
+  })
+
+  // `/ponytail lite` and "stop ponytail" take effect as the prompt goes in.
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    await refreshPonytail($, options)
+    return result
+  })
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) return next(e) // main-loop turns only, not subagents
@@ -113,7 +155,7 @@ export const register: Register = (on, options) => {
       const reading = { tokens: context.tokens, window: context.window }
       await update($, history, prev => [...prev, reading].slice(-12))
     }
-    if (showPonytail) await readPonytail($)
+    await refreshPonytail($, options)
     return next(e)
   })
 
@@ -126,13 +168,18 @@ export const register: Register = (on, options) => {
 
   // Don't name a local `h`: JSX compiles to the global h().
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const { detail, showPonytail } = await prefs($, options)
     const readings = detail === 'off' ? [] : await read($, history)
     const pony = showPonytail ? await read($, ponytail) : ''
     if (e.props.hasSurvey || (readings.length === 0 && !pony)) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const ponySegment = pony && <Text dimColor>{readings.length ? ' · ' : ''}ponytail: {pony}</Text>
+    // Starts the command in the prompt box rather than guessing which setting is wanted.
+    const settings = (
+      <Button key="settings" label="⚙" plain dimColor onPress={() => void $.prompt.fill({ text: '/overalls ' })} />
+    )
     const now = readings.at(-1)
-    if (!now) return <Box flexDirection="row">{ponySegment}</Box>
+    if (!now) return <Box flexDirection="row">{ponySegment}<Text> </Text>{settings}</Box>
 
     const percent = Math.round(pct(now))
     const w = weather(percent)
@@ -163,6 +210,7 @@ export const register: Register = (on, options) => {
           : [])}
         {ponySegment}
         <Text> </Text>
+        {settings}
         {percent >= COMPACT_AT && !e.props.isWorking && (
           <Button key="compact" label="Compact" variant="primary" onPress={compact} />
         )}
