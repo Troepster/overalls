@@ -6,10 +6,12 @@
     "name": "Troepster"
   },
   "homepage": "https://github.com/Troepster/overalls",
+  "repository": "https://github.com/Troepster/overalls",
   "license": "MIT",
   "icon": "./icon.svg",
   "documentationUrl": "https://github.com/Troepster/overalls#readme",
   "supportUrl": "https://github.com/Troepster/overalls/issues",
+  "privacyPolicyUrl": "https://github.com/Troepster/overalls#data-and-access",
   "keywords": [
     "mod",
     "context-window",
