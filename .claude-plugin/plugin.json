@@ -1,7 +1,7 @@
 {
   "name": "overalls",
-  "version": "0.2.4",
-  "description": "Status band above the prompt: context weather and Ponytail level",
+  "version": "0.3.0",
+  "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
   },
@@ -16,7 +16,8 @@
     "mod",
     "context-window",
     "status",
-    "ponytail"
+    "ponytail",
+    "caveman"
   ],
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -27,10 +28,34 @@
       "default": "full"
     },
     "ponytail": {
-      "type": "boolean",
-      "title": "Show Ponytail level",
-      "description": "Show whether Ponytail is installed and its current level",
-      "default": true
+      "type": "string",
+      "title": "Ponytail level",
+      "description": "How to show whether Ponytail is installed and its current level: off, icon or text",
+      "default": "icon"
+    },
+    "caveman": {
+      "type": "string",
+      "title": "Caveman mode",
+      "description": "How to show the mode the Caveman plugin runs in, when it's installed: off, icon or text",
+      "default": "icon"
+    },
+    "megacave": {
+      "type": "string",
+      "title": "Offer megacave",
+      "description": "List Caveman's Classical Chinese mode (megacave) in its dropdown: on or off",
+      "default": "off"
+    },
+    "limits": {
+      "type": "string",
+      "title": "Usage limits",
+      "description": "Show how much of your 5-hour and weekly usage is spent: on or off",
+      "default": "on"
+    },
+    "cost": {
+      "type": "string",
+      "title": "Session cost",
+      "description": "Show what this session has cost so far: on or off",
+      "default": "off"
     }
   }
 }
