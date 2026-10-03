@@ -86,6 +86,8 @@ you set the same setting with `/overalls` in a session that has the row.
 | Session cost | `on` · `off` | `off` | Show what this session has cost so far |
 | MCP warnings | `on` · `off` | `on` | Warn when an MCP server or connector fails or needs signing in again |
 | Running agents | `on` · `off` | `on` | Show `⧗ 2 agents` while subagents run; pressing it lists them (type and task) |
+| Turns left | `on` · `off` | `on` | Show `⌛ ~6 turns`: about how many more turns fit, at the average growth of the last five that grew (red from 3) |
+| Tool denials | `on` · `off` | `on` | Show `⛔ 2 denied` for tool calls refused by you, a hook, a permission rule or the auto-mode classifier; pressing it lists them, with Dismiss |
 
 What each weather level shows:
 
@@ -200,6 +202,9 @@ does stays inside your Claude Code session:
 - types an install request into the prompt box only when you press **Install**
   in the Config box; nothing is installed unless you send it and approve
   Claude's commands
+- reads the name of each tool Claude calls and, when one is refused (by you, a
+  hook, a permission rule or the auto-mode classifier), keeps the tool's name and
+  the first 100 characters of the reason in session state until you dismiss it
 - reads the name of each MCP tool Claude calls, the error text when one fails,
   and the failed-server list a ToolSearch returns, keeping only each failing
   server's name, whether it needs signing in or failed, and the first 100
@@ -223,7 +228,7 @@ Apart from that store, it writes no files, and the only program it starts is tha
 system opener, with that one fixed address, when you press **Reconnect**.
 
 It hooks four events only to observe them, never changing what they carry:
-`tool.call` (note an MCP server failing or answering again), `turn.complete`
+`tool.call` (note an MCP server failing or answering again, and a refused call), `turn.complete`
 (take a reading), `session.compact` (record the drop after a
 compaction, and reset the Ponytail level to its default) and `prompt.submit`
 (note a Ponytail switch once your prompt has gone in, so `/ponytail lite` shows

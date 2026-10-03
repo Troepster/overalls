@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { bar, caveMode, contrast, fmt, sparkSvg, heat, hexToRgb, levelAfter, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
+import { bar, caveMode, contrast, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -312,7 +312,7 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Agents', 'Cost', 'MCP'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Agents', 'Turns', 'Denials', 'Cost', 'MCP'])
   await ui.unmount()
 })
 
@@ -600,4 +600,50 @@ test('the desktop sparkline is an Svg of bars rising from the bottom, coloured b
   expect(svg).toContain('<rect x="0" y="13" width="4" height="1"') // empty still shows
   expect(svg).toContain('<rect x="5" y="7" width="4" height="7"')
   expect(svg).toContain('<rect x="10" y="0" width="4" height="14"')
+})
+
+test('turns left: space left over the recent growth, ignoring a compaction', () => {
+  const r = (tokens: number) => ({ tokens, window: 1000 })
+  expect(turnsLeft([r(100), r(200)])).toBeUndefined() // too few readings
+  expect(turnsLeft([r(100), r(200), r(300)])).toBe(7) // 700 left at 100 a turn
+  expect(turnsLeft([r(100), r(600), r(150), r(250)])).toBe(2) // the drop is skipped: (500 + 100) / 2 a turn
+  expect(turnsLeft([r(100), r(100), r(100)])).toBeUndefined() // no growth
+})
+
+test('refusals read as denials; a failing command does not', () => {
+  expect([
+    'Permission for this action was denied by the Claude Code auto mode classifier.',
+    "The user doesn't want to proceed with this tool use.",
+    'Blocked by hook: no rm -rf',
+    'Exit code 1: ls: cannot access x',
+    'Permission denied (publickey)',
+  ].map(deniedBy)).toEqual([true, true, true, false, false])
+})
+
+test('refused tool calls show as a count that lists them; a turns-left forecast follows the change', async ($, on) => {
+  memStore(on)
+  let tokens = 0
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
+  on('tool.call', (_$, e) =>
+    e.tool === 'Bash'
+      ? { isError: true, result: '', text: 'Permission for this action was denied by the Claude Code auto mode classifier.' }
+      : { isError: true, result: '', text: 'Exit code 2' },
+  )
+  on('turn.complete', () => ({ text: '' }))
+  for (const n of [100000, 150000, 180000]) {
+    tokens = n
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer' })
+  }
+  await $.tool.call({ tool: 'Bash', tool_use_id: 't1' } as never)
+  await $.tool.call({ tool: 'Read', tool_use_id: 't2' } as never)
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  expect(await textOf(ui)).toContain('⌛ ~0 turns') // 20k left at 40k a turn
+  expect((await ui.find({ key: 'denials' }))?.props.label).toBe('1 denied')
+  await ui.press({ key: 'denials' })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts).toContain('Tool denials')
+  expect(texts).toContain('Bash')
+  await ui.press({ key: 'denials-dismiss-0' })
+  expect(await ui.find({ key: 'denials' })).toBeUndefined()
+  await ui.unmount()
 })

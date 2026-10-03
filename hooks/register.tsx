@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { McpTrouble, Reading } from '../types'
+import type { Denial, McpTrouble, Reading } from '../types'
 import { PONYTAIL_PNG } from './ponytail-icon'
 
 const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Reading[])
@@ -10,14 +10,15 @@ const level = atom({ plugin: 'overalls', key: 'level' } as const, '')
 const caveman = atom({ plugin: 'overalls', key: 'caveman' } as const, '')
 const mcpDown = atom({ plugin: 'overalls', key: 'mcpDown' } as const, {} as Record<string, McpTrouble>)
 // Which box is open above the band, if any: ⚙'s Config box or the MCP errors box. One at a time.
-const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents')
+const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents' | 'denials')
+const denials = atom({ plugin: 'overalls', key: 'denials' } as const, [] as Denial[])
 
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
 const PONY = ['off', 'icon', 'text'] as const
 const ONOFF = ['on', 'off'] as const
 // Every setting and what it takes, in /overalls, the Config box and userConfig alike.
-const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF } as const
+const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
@@ -30,6 +31,8 @@ const TIPS = {
   'cfg-limits': 'Limits: how much of your 5-hour and weekly usage is spent, and when each resets',
   'cfg-resets': 'Resets: how long until each limit resets',
   'cfg-agents': 'Agents: how many subagents are running; press it to see them',
+  'cfg-turns': 'Turns: about how many more turns fit, at the pace of the last few',
+  'cfg-denials': 'Denials: tool calls that were refused (by you, a hook or a permission rule); press it to see them',
   'cfg-cost': 'Cost: what this session has cost so far',
   'cfg-mcp': 'MCP: a warning when an MCP server or connector fails or needs signing in again',
 } as const
@@ -218,6 +221,21 @@ export const untilReset = (resetsAt: string, now: number) => {
   return d ? `${d}d${h ? `${h}h` : ''}` : h ? `${h}h${min ? `${min}m` : ''}` : `${min}m`
 }
 
+// About how many more turns fit: the space left over the average growth of the last 5 turns that
+// grew (a compaction's drop isn't a turn's growth). Undefined until 3 readings, or with no growth.
+export const turnsLeft = (readings: Reading[]) => {
+  const growth = readings.slice(1).map((r, i) => r.tokens - readings[i]!.tokens).filter(d => d > 0).slice(-5)
+  const now = readings.at(-1)
+  if (readings.length < 3 || !growth.length || !now) return undefined
+  return Math.max(0, Math.floor((now.window - now.tokens) / (growth.reduce((a, b) => a + b, 0) / growth.length)))
+}
+
+// A tool call refused rather than failed: denied by a hook (`deny`), declined by the person, or
+// refused by a permission rule or the auto-mode classifier. Its own error (a command that failed)
+// is not a denial.
+export const deniedBy = (text: string) =>
+  /permission for this action was denied|doesn't want to proceed|user (has )?(rejected|denied|declined)|was (denied|blocked) by|blocked by (a |the )?hook|not allowed by (your )?(permission|settings)|permission (rule|settings) (deny|denied)/i.test(text)
+
 export const weather = (percent: number) =>
   percent < 25 ? { icon: '☀', word: 'Clear' }
   : percent < 50 ? { icon: '☁', word: 'Cloudy' }
@@ -313,6 +331,8 @@ async function prefs($: EngineInterface, options: Options) {
     limits: pick('limits') !== 'off',
     resets: pick('resets') !== 'off',
     agents: pick('agents') !== 'off',
+    turns: pick('turns') !== 'off',
+    denials: pick('denials') !== 'off',
     cost: pick('cost') === 'on',
     mcp: pick('mcp') !== 'off',
   }
@@ -357,7 +377,7 @@ export const register: Register = (on, options) => {
     const value = field in FIELDS && (FIELDS[field as Field] as readonly string[]).includes(arg) ? arg : undefined
     if (value === undefined) {
       const p = await prefs($, options)
-      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
+      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
       return { text: `Overalls ${now}\nUsage: /overalls ${USAGE}` }
     }
     const deny = await setPref($, options, field, value)
@@ -388,7 +408,10 @@ export const register: Register = (on, options) => {
           return server in prev ? rest : prev
         })
       }
-    } else if (e.tool === 'ToolSearch' && !result.isError && result.result) {
+    }
+    const refusal = 'deny' in result && result.deny ? result.deny : result.isError && deniedBy(result.text ?? '') ? (result.text ?? '') : ''
+    if (refusal) await update($, denials, prev => [...prev, { tool: e.tool, reason: detailOf(refusal) }].slice(-20))
+    if (e.tool === 'ToolSearch' && !result.isError && result.result) {
       const failed = (result.result as { failed_mcp_servers?: { name: string; error?: string }[] }).failed_mcp_servers ?? []
       if (failed.length) {
         await update($, mcpDown, prev => ({
@@ -427,7 +450,8 @@ export const register: Register = (on, options) => {
 
   // Don't name a local `h`: JSX compiles to the global h().
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents } = await prefs($, options)
+    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials } = await prefs($, options)
+    const refused = showDenials ? await read($, denials) : []
     const down = mcp ? Object.entries(await read($, mcpDown)) : []
     const readings = detail === 'off' ? [] : await read($, history)
     const pony = ponyAs !== 'off' ? await read($, ponytail) : ''
@@ -558,7 +582,22 @@ export const register: Register = (on, options) => {
           ),
         ]
       : []
-    const ponySegment = [...mcpSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment]
+    // Refused tool calls, until dismissed: a count that opens the Tool denials box.
+    const denialSegment = refused.length
+      ? [
+          widget(
+            <Text color={heat(100)}>⛔ </Text>,
+            <Button
+              key="denials"
+              label={`${refused.length} denied`}
+              plain
+              hover={{ scope: 'denials', underline: true }}
+              onPress={() => void update($, panel, p => (p === 'denials' ? '' : 'denials'))}
+            />,
+          ),
+        ]
+      : []
+    const ponySegment = [...mcpSegment, ...denialSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment]
     // No tooltip prop: each card is drawn hidden over the Config box's blank row, revealed by its
     // hover scope.
     const tip = (scope: keyof typeof TIPS) => (
@@ -646,8 +685,35 @@ export const register: Register = (on, options) => {
         ))}
       </Box>
     )
+    // One row per refused call, newest last: the tool and why, with Dismiss.
+    const denialsBox = (
+      <Box flexDirection="column" borderStyle="round" borderColor={heat(100)} paddingX={1} marginBottom={1}>
+        <Box flexDirection="row">
+          <Text bold>Tool denials</Text>
+          <Box flexDirection="row" flexGrow={1} />
+          <Button key="denials-dismiss-all" label="Dismiss all" plain dimColor onPress={() => void update($, denials, () => [])} />
+        </Box>
+        <Text> </Text>
+        {...refused.map((d, i) => (
+          <Box flexDirection="row" gap={2}>
+            <Box flexDirection="row" width={18}>
+              <Text>{d.tool.startsWith('mcp__') ? `${mcpLabel(mcpServer(d.tool))} ${d.tool.split('__')[2] ?? ''}` : d.tool}</Text>
+            </Box>
+            <Box flexDirection="row" flexGrow={1} flexShrink={1}>
+              <Text dimColor>{d.reason}</Text>
+            </Box>
+            <Button key={`denials-dismiss-${i}`} label="Dismiss" plain dimColor onPress={() => void update($, denials, prev => prev.filter((_, j) => j !== i))} />
+          </Box>
+        ))}
+      </Box>
+    )
     const withPanel = (band: ReturnType<typeof Box>) =>
-      shown === 'agents' && running.length ? (
+      shown === 'denials' && refused.length ? (
+        <Box flexDirection="column" width="100%">
+          {denialsBox}
+          {band}
+        </Box>
+      ) : shown === 'agents' && running.length ? (
         <Box flexDirection="column" width="100%">
           {agentsBox}
           {band}
@@ -668,6 +734,7 @@ export const register: Register = (on, options) => {
             <Box flexDirection="row" gap={1}>
               <Box flexDirection="column" width="50%" borderStyle="round" borderDimColor paddingX={1}>
                 {setting('weather', 'Weather', DETAILS.map(d => choice('weather', d, d === detail)))}
+                {setting('turns', 'Turns', ONOFF.map(m => choice('turns', m, (m === 'on') === turns)))}
                 {setting('caveman', 'Caveman', [
                   ...PONY.map(m => choice('caveman', m, m === caveAs)),
                   // Megacave belongs to Caveman, so its switch shares the row, past a divider.
@@ -689,6 +756,7 @@ export const register: Register = (on, options) => {
                 {setting('ponytail', 'Ponytail', [...PONY.map(m => choice('ponytail', m, m === ponyAs)), ...installPonytail])}
                 {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
                 {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
+                {setting('denials', 'Denials', ONOFF.map(m => choice('denials', m, (m === 'on') === showDenials)))}
               </Box>
             </Box>
           </Box>
@@ -701,6 +769,7 @@ export const register: Register = (on, options) => {
     const percent = Math.round(pct(now))
     const w = weather(percent)
     const delta = now.tokens - (readings.at(-2)?.tokens ?? 0)
+    const left = turnsLeft(readings)
 
     // Pressing the forecast steps minimal → normal → full → minimal; off is the Config box's.
     const cycle = () => set('weather', DETAILS[(DETAILS.indexOf(detail) % 3) + 1] ?? 'full')
@@ -743,6 +812,9 @@ export const register: Register = (on, options) => {
               widget(sparkline),
               widget(<Text dimColor>{delta >= 0 ? '▲ +' : '▼ -'}{fmt(Math.abs(delta))} last turn</Text>),
             ]
+          : []),
+        ...(turns && left !== undefined
+          ? [widget(<Text color={left <= 3 ? heat(100) : undefined} dimColor={left > 3}>⌛ ~{left} turn{left === 1 ? '' : 's'}</Text>)]
           : []),
         ...ponySegment,
       ],
