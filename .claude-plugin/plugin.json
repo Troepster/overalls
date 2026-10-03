@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -73,6 +73,18 @@
       "type": "string",
       "title": "Running agents",
       "description": "Show how many subagents are running, and list them on press: on or off",
+      "default": "on"
+    },
+    "turns": {
+      "type": "string",
+      "title": "Turns left",
+      "description": "Show about how many more turns fit in the context, at the pace of the last few: on or off",
+      "default": "on"
+    },
+    "denials": {
+      "type": "string",
+      "title": "Tool denials",
+      "description": "Show tool calls that were refused (by you, a hook or a permission rule) until dismissed: on or off",
       "default": "on"
     }
   }
