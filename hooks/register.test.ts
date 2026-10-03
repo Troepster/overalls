@@ -381,7 +381,7 @@ test('Caveman modes read as its statusline reads them', () => {
     .toEqual(['caveman', 'caveman', 'caveman', 'ultracave', 'ultracave', 'megacave', 'megacave', 'commit', 'off', 'off', 'off', 'off'])
 })
 
-test("Caveman shows this session's own mode and savings, and a pick runs its command", { options: { weather: 'off', ponytail: 'off', caveman: 'text', limits: 'off' } }, async ($, on) => {
+test("Caveman shows this session's own mode, and a pick runs its command", { options: { weather: 'off', ponytail: 'off', caveman: 'text', limits: 'off' } }, async ($, on) => {
   memStore(on)
   on('settings.read', () => ({ value: { enabledPlugins: { 'caveman@caveman': true } } }))
   on('config.list', () => ({ value: [] }))
@@ -390,7 +390,6 @@ test("Caveman shows this session's own mode and savings, and a pick runs its com
   const files: Record<string, string> = {
     '/home/u/.claude/.caveman-sessions/sess-1.mode': 'ultracave\n',
     '/home/u/.claude/.caveman-active': 'caveman', // another window's: not this one
-    '/home/u/.claude/.caveman-statusline-suffix': '⛏ 12.4k\n',
   }
   on('fs.read', (_$, e) => { const value = files[e.path]; return value !== undefined ? { value } : { deny: 'ENOENT' } })
   on('session.start', (_$, e) => e)
@@ -402,7 +401,7 @@ test("Caveman shows this session's own mode and savings, and a pick runs its com
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
-  expect(await textOf(ui)).toBe('caveman: ultracave ⛏ 12.4k')
+  expect(await textOf(ui)).toBe('caveman: ultracave')
   const modes = async () => ((await ui.find({ key: 'caveman-mode' }))?.props.options as { value: string }[]).map(o => o.value)
   expect(await modes()).toEqual(['ultracave', 'caveman', 'off']) // megacave only when asked for
   await ui.press({ key: 'settings' })

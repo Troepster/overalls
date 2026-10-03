@@ -76,7 +76,7 @@ you set the same setting with `/overalls` in a session that has the row.
 |---|---|---|---|
 | Weather detail | `off` · `minimal` · `normal` · `full` (typed; anything else counts as `full`) | `full` | How much of the forecast to show |
 | Ponytail level | `off` · `icon` · `text` (typed; anything else counts as `icon`, and an old on/off value as `icon`/`off`) | `icon` | Show whether Ponytail is installed and its level, after its logo or the word `ponytail:` |
-| Caveman mode | `off` · `icon` · `text` (typed; anything else counts as `icon`) | `icon` | Show Caveman's mode and lifetime savings where it's installed, after 🪨 or the word `caveman:` |
+| Caveman mode | `off` · `icon` · `text` (typed; anything else counts as `icon`) | `icon` | Show Caveman's mode where it's installed, after 🪨 or the word `caveman:` |
 | Offer megacave | `on` · `off` | `off` | List Caveman's Classical Chinese mode (`megacave`) in its dropdown; in the Config box it sits on Caveman's row |
 | Usage limits | `on` · `off` | `on` | Show how much of your 5-hour and weekly limits is spent (subscriptions only) |
 | Session cost | `on` · `off` | `off` | Show what this session has cost so far |
@@ -132,8 +132,7 @@ prompt. A plugin's hooks start with the next session.
   nothing shows.
 - **Mode:** this session's own. Caveman keeps each session's mode in
   `.caveman-sessions/<session id>.mode` in your Claude config directory, so the
-  band reads that, with the lifetime savings Caveman writes to
-  `.caveman-statusline-suffix`. A session with no file of its own (one started
+  band reads that. A session with no file of its own (one started
   before Caveman was installed) shows `off`; the shared `.caveman-active`, which
   holds the last mode set in any window, is read only when there's no session id.
 - **Switched** by picking a mode from its dropdown (ultracave, caveman, off, and
@@ -150,9 +149,9 @@ does stays inside your Claude Code session:
 - reads the session's usage-limit percentages and cost (`$.session.usage()`)
   when those widgets are on
 - reads your Claude Code settings to see whether Caveman is enabled and, if it
-  is, this session's id and three of Caveman's files in your Claude config
-  directory: `.caveman-sessions/<session id>.mode`, `.caveman-active` and
-  `.caveman-statusline-suffix`
+  is, this session's id and Caveman's mode file for it in your Claude config
+  directory: `.caveman-sessions/<session id>.mode` (or `.caveman-active` when
+  there's no session id)
 - reads Ponytail's `config.json`, for its default level, and the
   `PONYTAIL_DEFAULT_MODE`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR` and `HOME`
   environment variables

@@ -7,7 +7,7 @@ import { PONYTAIL_PNG } from './ponytail-icon'
 const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Reading[])
 const ponytail = atom({ plugin: 'overalls', key: 'ponytail' } as const, '')
 const level = atom({ plugin: 'overalls', key: 'level' } as const, '')
-const caveman = atom({ plugin: 'overalls', key: 'caveman' } as const, { mode: '', savings: '' })
+const caveman = atom({ plugin: 'overalls', key: 'caveman' } as const, '')
 const configOpen = atom({ plugin: 'overalls', key: 'configOpen' } as const, false)
 
 const BARS = '▁▂▃▄▅▆▇█'
@@ -23,7 +23,7 @@ const COMPACT_AT = 75
 const TIPS = {
   'cfg-weather': 'Weather: a forecast of how full the context window is',
   'cfg-ponytail': 'Ponytail: the level the Ponytail plugin is running at',
-  'cfg-caveman': 'Caveman: the mode the Caveman plugin is running in, and the tokens it has saved',
+  'cfg-caveman': 'Caveman: the mode the Caveman plugin is running in',
   'cfg-megacave': 'Megacave: offer Caveman\'s Classical Chinese mode in its dropdown',
   'cfg-limits': 'Limits: how much of your 5-hour and weekly usage is spent',
   'cfg-cost': 'Cost: what this session has cost so far',
@@ -119,7 +119,8 @@ async function switchPonytail($: EngineInterface, args: string) {
 }
 
 // Caveman keeps each session's mode in <claude dir>/.caveman-sessions/<session id>.mode, so this
-// session's is read straight from there, with its lifetime savings from .caveman-statusline-suffix.
+// session's is read straight from there. (It no longer reports a savings figure: 3.1.0 empties
+// .caveman-statusline-suffix as "not measurements".)
 // No file means Caveman isn't running here (a session started before it was installed): off. Its
 // own statusline falls back to the last-write-wins .caveman-active, which shows another window's
 // mode, so that is read only when there is no usable session id.
@@ -137,13 +138,12 @@ export const caveMode = (raw: unknown) => {
 const readCaveman = ($: EngineInterface) => checkCaveman($).catch(() => {})
 
 async function checkCaveman($: EngineInterface) {
-  if (!(await isInstalled($, 'caveman'))) return update($, caveman, () => ({ mode: '', savings: '' }))
+  if (!(await isInstalled($, 'caveman'))) return update($, caveman, () => '')
   const dir = await claudeDir($)
   const id = await $.session.id()
   const own = /^[A-Za-z0-9_-]{1,128}$/.test(id) ? `${dir}/.caveman-sessions/${id}.mode` : `${dir}/.caveman-active`
   const raw = await $.fs.read(own).catch(() => undefined)
-  const savings = await $.fs.read(`${dir}/.caveman-statusline-suffix`).catch(() => '')
-  await update($, caveman, () => ({ mode: caveMode(raw), savings: String(savings).trim() }))
+  await update($, caveman, () => caveMode(raw))
 }
 
 // Caveman's modes are commands of their own; off is `/caveman off`.
@@ -317,7 +317,7 @@ export const register: Register = (on, options) => {
     const { detail, pony: ponyAs, cave: caveAs, megacave, limits, cost } = await prefs($, options)
     const readings = detail === 'off' ? [] : await read($, history)
     const pony = ponyAs !== 'off' ? await read($, ponytail) : ''
-    const cave = caveAs !== 'off' ? await read($, caveman) : { mode: '', savings: '' }
+    const cave = caveAs !== 'off' ? await read($, caveman) : ''
     const usage = limits || cost ? await $.session.usage().catch(() => undefined) : undefined
     // With nothing else to show, ⚙ still draws alone, so both turned off can be turned on again.
     if (e.props.hasSurvey) return next(e)
@@ -381,13 +381,12 @@ export const register: Register = (on, options) => {
       )
     // Caveman's logo is its trademark, so a generic rock stands for it; nothing shows where it
     // isn't installed.
-    const caveSegment = cave.mode
+    const caveSegment = cave
       ? [
           widget(
             caveAs === 'text' ? <Text dimColor>caveman:</Text> : <Text>🪨</Text>,
             // Megacave answers in Classical Chinese, so it's offered only when asked for.
-            picker('caveman-mode', cave.mode, megacave ? CAVE_MODES : CAVE_MODES.filter(m => m !== 'megacave'), v => switchCaveman($, v)),
-            ...(cave.savings ? [<Text dimColor> {cave.savings}</Text>] : []),
+            picker('caveman-mode', cave, megacave ? CAVE_MODES : CAVE_MODES.filter(m => m !== 'megacave'), v => switchCaveman($, v)),
           ),
         ]
       : []
