@@ -122,3 +122,19 @@ test('subagent turns leave the forecast alone', { options: { weather: 'full', po
   expect(await textOf(ui)).toBe('☂ Showers 67% · 134.4k / 200k · ▂▆ · ▲ +98.3k last turn ')
   await ui.unmount()
 })
+
+for (const [typed, expected] of [['Minimal', '☂ 67% '], [' NORMAL ', '☂ Showers 67% · 134.4k / 200k '], ['bogus', '☂ Showers 67% · 134.4k / 200k · ▂▆ · ▲ +98.3k last turn ']] as const) {
+  test(`weather typed as ${JSON.stringify(typed)}`, { options: { weather: typed, ponytail: false } }, async ($, on) => {
+    let tokens = 0
+    on('session.usage', () => ({ value: { startedAt: 0, context: { tokens, window: 200000 }, rateLimits: [] } }))
+    on('turn.complete', () => ({ text: '' }))
+    on('ui.render', () => ({ tree: null }))
+    for (const n of [36100, 134400]) {
+      tokens = n
+      await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `t${n}`, reason: 'answer' })
+    }
+    const ui = await $.ui.mount({ plugin: 'overalls', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+    expect(await textOf(ui)).toBe(expected)
+    await ui.unmount()
+  })
+}

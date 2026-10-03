@@ -7,6 +7,7 @@ const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Read
 const ponytail = atom({ plugin: 'overalls', key: 'ponytail' } as const, '')
 
 const BARS = '▁▂▃▄▅▆▇█'
+const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
 const COMPACT_AT = 75
 
 // Ponytail writes its level to <claude dir>/.ponytail-active and deletes it when off.
@@ -88,7 +89,8 @@ async function recordDrop($: EngineInterface, tokensAfter?: number) {
 }
 
 export const register: Register = (on, options) => {
-  const detail = options.weather as 'off' | 'minimal' | 'normal' | 'full'
+  // A typed field, not a picker: the directory doesn't accept userConfig `options` yet.
+  const detail = DETAILS.find(d => d === String(options.weather).trim().toLowerCase()) ?? 'full'
   const showPonytail = options.ponytail === true
 
   if (showPonytail) {

@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Status band above the prompt: context weather and Ponytail level",
   "author": {
     "name": "Troepster"
@@ -21,13 +21,7 @@
     "weather": {
       "type": "string",
       "title": "Weather detail",
-      "description": "How much of the context forecast to show",
-      "options": [
-        "off",
-        "minimal",
-        "normal",
-        "full"
-      ],
+      "description": "How much of the context forecast to show: off, minimal, normal or full",
       "default": "full"
     },
     "ponytail": {

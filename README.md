@@ -34,7 +34,7 @@ one reloads the mod.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
-| Weather detail | `off` · `minimal` · `normal` · `full` | `full` | How much of the forecast to show |
+| Weather detail | `off` · `minimal` · `normal` · `full` (typed; anything else counts as `full`) | `full` | How much of the forecast to show |
 | Show Ponytail level | on · off | on | Show whether Ponytail is installed and its level |
 
 What each weather level shows:
@@ -71,6 +71,12 @@ does stays inside your Claude Code session:
 - compacts the conversation only when you press its **Compact** button
 
 It writes no files and runs no commands.
+
+It hooks three events only to observe them, never changing what they carry:
+`turn.complete` (take a reading), `session.compact` (record the drop after a
+compaction) and `prompt.submit` (re-read the Ponytail level once your prompt has
+gone in, so `/ponytail lite` shows straight away). It also draws the band above
+the prompt.
 
 ## Development
 
