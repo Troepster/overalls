@@ -18,6 +18,10 @@ repo's `main` branch.
 - Start sessions **in this folder**. `~/.claude/settings.json` sets
   `CLAUDE_CODE_PLUGIN_DIRS` to it, so the mod loads from here and every save
   hot-reloads it. Don't also install it from the marketplace: two bands.
+  The desktop app's sessions are headless and also need
+  `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` there; without it the folder loads once at
+  session start and saves don't reload (a session on 2026-10-03 kept drawing
+  the old band through three edits before this was found).
 - A reload re-runs `register` and `session.start`. Keep anything that must
   survive in `$.state` (the `atom`s at the top of `register.tsx`), declared in
   `types/index.d.ts`. Module variables start over.
@@ -25,6 +29,13 @@ repo's `main` branch.
   New behaviour gets a test; stub what the engine would answer with `on(...)`
   in the test (see existing tests for `session.usage`, `settings.read`,
   `fs.read`, `env.get`).
+- `<>…</>` is a **column** Box in this engine, not a transparent fragment, and
+  a bare `<Box>` stacks on desktop too. Keep band segments as direct children
+  of one `<Box flexDirection="row">`; a test asserts every Box says `row`.
+- `npx -p typescript tsc --noEmit -p .` type-checks against
+  `.claude-plugin/types`. That copy can lag the engine: if it reports API
+  errors, refresh it from the plugin-authoring skill's `types/claude-code.d.ts`
+  (or `/plugin-types .claude-plugin/types`) before trusting the errors.
 
 ## Directory constraints (checked by the portal's Validate, not the local one)
 

@@ -48,6 +48,11 @@ What each weather level shows:
 
 ## Ponytail detection
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/ponytail-logo-dark.png">
+  <img src="assets/ponytail-logo.png" width="110" alt="Ponytail, the lazy senior dev">
+</picture>
+
 - **Installed:** an enabled `ponytail@…` entry in `enabledPlugins`. Otherwise the
   band shows `ponytail: not installed`.
 - **Level:** read from `.ponytail-active` in your Claude config directory
@@ -106,3 +111,10 @@ keeps. To add a setting, declare a field under `userConfig` in
 ## Licence
 
 [MIT](LICENSE)
+
+## Credits
+
+[Ponytail](https://github.com/DietrichGebert/ponytail) and its logo are by
+[Dietrich Gebert](https://github.com/DietrichGebert), used under the MIT licence
+([`assets/PONYTAIL-LICENSE`](assets/PONYTAIL-LICENSE)). Overalls only reads the
+level Ponytail writes; it isn't affiliated with or endorsed by the Ponytail project.
