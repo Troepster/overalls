@@ -83,6 +83,7 @@ you set the same setting with `/overalls` in a session that has the row.
 | Offer megacave | `on` · `off` | `off` | List Caveman's Classical Chinese mode (`megacave`) in its dropdown; in the Config box it sits on Caveman's row |
 | Usage limits | `on` · `off` | `on` | Show how much of your 5-hour and weekly limits is spent (subscriptions only) |
 | Limit resets | `on` · `off` | `on` | Show how long until each limit resets (`5h 42% ↻1h20m`); in the Config box it sits on the Limits row |
+| Limit run-out | `off` · `warn` · `always` (typed; anything else counts as `warn`) | `warn` | Warn when a limit will run out before it resets, at your pace over the last hour: `⚠1h40m` in amber, red under 30 minutes. `always` also shows `✓ lasts` for a limit that won't. Needs 10 minutes of samples and 2 points of movement first. Follows each limit, or stands alone (`5h ⚠1h40m`) with the limits off |
 | Session cost | `on` · `off` | `off` | Show what this session has cost so far |
 | MCP warnings | `on` · `off` | `on` | Warn when an MCP server or connector fails or needs signing in again |
 | Running agents | `on` · `off` | `on` | Show `⧗ 2 agents` while subagents run; pressing it lists them (type and task) |
@@ -183,7 +184,9 @@ does stays inside your Claude Code session:
 - reads the session's list of subagents (`$.agent.list()`: type, task, status)
   when the agents widget is on
 - redraws the band every 30 seconds, so countdowns and the agent count stay
-  current
+  current, and at each redraw notes the usage-limit percentages
+  (`$.session.usage()`), keeping the last hour of them in session memory to
+  tell when a limit will run out
 - reads your Claude Code settings to see whether Caveman is enabled and, if it
   is, this session's id and Caveman's mode file for it in your Claude config
   directory: `.caveman-sessions/<session id>.mode` (or `.caveman-active` when
