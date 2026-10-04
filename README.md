@@ -13,6 +13,11 @@ appears in the band.
 Where the widgets don't fit on one row, they wrap whole onto a second, while
 Compact and **⚙** stay at the right of the first.
 
+Prefer it out of the way? **View** in the ⚙ Config box (or `/overalls view …`)
+puts Overalls in a **Pane** instead: the same widgets, wrapping to its width, with the MCP
+errors, tool denials and running agents listed in full, and the Config box
+inside it. `both` shows the band and the Pane.
+
 ## Install
 
 In the Claude Code terminal:
@@ -64,7 +69,8 @@ also works in the desktop app, where `/config` isn't available:
 The **⚙** at the right of the band opens a **Config** box above it with every
 choice for every setting, the current one ticked; pressing one sets it, so you
 see the change in the band as you make it. Press **⚙** again to close it. Hover
-over a setting's name in the Config box for a line on what it is.
+over a setting's name in the Config box for a line on what it is and the
+`/overalls` command that sets it.
 
 Pressing the forecast itself (`Showers`, or `67%` at `minimal`) steps
 the weather detail through `minimal` → `normal` → `full` and round again; `off`
@@ -77,6 +83,7 @@ you set the same setting with `/overalls` in a session that has the row.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
+| View | `bar` · `pane` · `both` | `bar` | Where Overalls shows: the band above the prompt, a Pane with everything at full size (it opens by itself only in a wide enough window), or both |
 | Weather detail | `off` · `minimal` · `normal` · `full` (typed; anything else counts as `full`) | `full` | How much of the forecast to show |
 | Ponytail level | `off` · `icon` · `text` (typed; anything else counts as `icon`, and an old on/off value as `icon`/`off`) | `icon` | Show whether Ponytail is installed and its level, after its logo or the word `ponytail:` |
 | Caveman mode | `off` · `icon` · `text` (typed; anything else counts as `icon`) | `icon` | Show Caveman's mode where it's installed, after 🪨 or the word `caveman:` |
