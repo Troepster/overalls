@@ -312,7 +312,10 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'Turns', 'Denials', 'Cost', 'MCP'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'View', 'Turns', 'Denials', 'Cost', 'MCP'])
+  // Each card ends with its command.
+  const view = (await ui.findAll({ type: 'Text' })).find(t => t.props.inverse && t.text.trim().startsWith('View:'))
+  expect(view?.text.trim().endsWith('/overalls view bar|pane|both')).toBe(true)
   await ui.unmount()
 })
 
@@ -708,4 +711,43 @@ test('refused tool calls show as a count that lists them; a turns-left forecast 
   await ui.press({ key: 'denials-dismiss-0' })
   expect(await ui.find({ key: 'denials' })).toBeUndefined()
   await ui.unmount()
+})
+
+test('the view shows Overalls as the band, a Pane with everything, or both', { options: { weather: 'full', ponytail: 'off', limits: 'off' } }, async ($, on) => {
+  const store = memStore(on)
+  on('config.list', () => ({ value: [] }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 134400, window: 200000 }, rateLimits: [] } }))
+  on('turn.complete', () => ({ text: '' }))
+  const panes: string[] = []
+  on('ui.open', (_$, e) => (panes.push(`open ${e.id}`), { value: { id: e.id } as never }))
+  on('ui.close', (_$, e) => (panes.push(`close ${e.id}`), { value: undefined }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const run = (args: string) => $.command.run({ command: 'overalls', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+
+  await run('view both')
+  expect(store.prefs).toEqual({ view: 'both' })
+  const pane = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'Pane', requestId: 'overalls', props: { isFocused: false } as never })
+  const texts = (await pane.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts).not.toContain('Overalls') // the Pane's own title says it
+  expect(texts.join('')).toContain('67% · 134.4k / 200k')
+  // In the Pane widgets stack, each wrapping between its pieces, whose boxes never shrink.
+  const boxes = (await pane.findAll({ type: 'Box' })).map(b => b.props)
+  expect(boxes.filter(b => b.flexWrap === 'wrap').length).toBeGreaterThan(0)
+  expect(boxes.filter(b => b.flexShrink === 0).length).toBeGreaterThan(2)
+  // Only the row they flow in is full width: a full-width widget would take a row of its own.
+  expect(boxes.filter(b => b.flexWrap === 'wrap' && b.width === '100%')).toHaveLength(1)
+  await pane.unmount()
+  const band = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  expect(await textOf(band)).toContain('Showers')
+  // The Config box is one column in the Pane, two in the band.
+  const inPane = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'Pane', requestId: 'overalls', props: { isFocused: false } as never })
+  await inPane.press({ key: 'settings' })
+  expect((await inPane.findAll({ type: 'Box' })).filter(b => b.props.borderDimColor).map(b => b.props.width)).toEqual(['100%', '100%'])
+  // No code comment leaks into the drawing as text.
+  expect((await inPane.findAll({ type: 'Text' })).filter(t => t.text.trim().startsWith('//'))).toHaveLength(0)
+  await inPane.unmount()
+  await band.unmount()
+
+  await run('view bar')
+  expect(panes).toEqual(['open overalls', 'close overalls'])
 })

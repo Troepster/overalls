@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -21,6 +21,12 @@
   ],
   "types": "./types/index.d.ts",
   "userConfig": {
+    "view": {
+      "type": "string",
+      "title": "View",
+      "description": "Where Overalls shows: bar (above the prompt), pane, or both",
+      "default": "bar"
+    },
     "weather": {
       "type": "string",
       "title": "Weather detail",
