@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -80,6 +80,12 @@
       "title": "Turns left",
       "description": "Show about how many more turns fit in the context, at the pace of the last few: on or off",
       "default": "on"
+    },
+    "runout": {
+      "type": "string",
+      "title": "Limit run-out",
+      "description": "Warn when a usage limit will run out before it resets, at your pace over the last hour: off, warn or always (always also marks a limit that lasts)",
+      "default": "warn"
     },
     "denials": {
       "type": "string",

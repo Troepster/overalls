@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Denial, McpTrouble, Reading } from '../types'
+import type { Denial, McpTrouble, Reading, Sample } from '../types'
 import { PONYTAIL_PNG } from './ponytail-icon'
 
 const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Reading[])
@@ -12,13 +12,16 @@ const mcpDown = atom({ plugin: 'overalls', key: 'mcpDown' } as const, {} as Reco
 // Which box is open above the band, if any: ⚙'s Config box or the MCP errors box. One at a time.
 const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents' | 'denials')
 const denials = atom({ plugin: 'overalls', key: 'denials' } as const, [] as Denial[])
+// Each usage limit's percent over the last hour, by kind, for when it runs out.
+const limitSamples = atom({ plugin: 'overalls', key: 'limitSamples' } as const, {} as Record<string, Sample[]>)
 
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
 const PONY = ['off', 'icon', 'text'] as const
 const ONOFF = ['on', 'off'] as const
+const RUNOUT = ['off', 'warn', 'always'] as const
 // Every setting and what it takes, in /overalls, the Config box and userConfig alike.
-const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF } as const
+const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF, runout: RUNOUT } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
@@ -30,6 +33,7 @@ const TIPS = {
   'cfg-megacave': 'Megacave: offer Caveman\'s Classical Chinese mode in its dropdown',
   'cfg-limits': 'Limits: how much of your 5-hour and weekly usage is spent, and when each resets',
   'cfg-resets': 'Resets: how long until each limit resets',
+  'cfg-runout': 'Run-out: when a limit runs out before it resets, at your pace over the last hour; always also marks one that lasts',
   'cfg-agents': 'Agents: how many subagents are running; press it to see them',
   'cfg-turns': 'Turns: about how many more turns fit, at the pace of the last few',
   'cfg-denials': 'Denials: tool calls that were refused (by you, a hook or a permission rule); press it to see them',
@@ -221,6 +225,28 @@ export const untilReset = (resetsAt: string, now: number) => {
   return d ? `${d}d${h ? `${h}h` : ''}` : h ? `${h}h${min ? `${min}m` : ''}` : `${min}m`
 }
 
+// A limit's samples with this one added: the last hour, at most one per 25 s (the band redraws every
+// 30 s, and on more than the clock). A fall in percent is a reset, which starts them over.
+export const sampled = (prev: Sample[], at: number, pct: number) => {
+  const last = prev.at(-1)
+  if (last && pct < last.pct) return [{ at, pct }]
+  if (last && at - last.at < 25_000) return prev
+  return [...prev.filter(s => at - s.at <= 3_600_000), { at, pct }]
+}
+
+// When a limit runs out at its pace over the samples: a time, or Infinity when it lasts until it
+// resets (or hasn't moved). Undefined under 10 minutes, or 1 point of movement: whole-percent steps
+// are noise until then.
+export const runsOutAt = (samples: Sample[], resetsAt?: string) => {
+  const [first, last] = [samples[0], samples.at(-1)]
+  if (!first || !last || last.at - first.at < 600_000) return undefined
+  const moved = last.pct - first.pct
+  if (moved <= 0) return Infinity
+  if (moved < 2) return undefined
+  const at = last.at + ((100 - last.pct) * (last.at - first.at)) / moved
+  return resetsAt && at >= Date.parse(resetsAt) ? Infinity : at
+}
+
 // About how many more turns fit: the space left over the average growth of the last 5 turns that
 // grew (a compaction's drop isn't a turn's growth). Undefined until 3 readings, or with no growth.
 export const turnsLeft = (readings: Reading[]) => {
@@ -310,6 +336,13 @@ async function recordDrop($: EngineInterface, tokensAfter?: number) {
   })
 }
 
+async function sampleLimits($: EngineInterface) {
+  const limits = (await $.session.usage().catch(() => undefined))?.rateLimits
+  if (!limits?.length) return
+  const now = await $.clock.now().catch(() => Date.now())
+  await update($, limitSamples, prev => Object.fromEntries(limits.map(r => [r.kind, sampled(prev[r.kind] ?? [], now, r.percentUsed)])))
+}
+
 type Prefs = Partial<Record<Field, string | boolean>>
 type Options = Parameters<Register>[1]
 
@@ -335,6 +368,7 @@ async function prefs($: EngineInterface, options: Options) {
     denials: pick('denials') !== 'off',
     cost: pick('cost') === 'on',
     mcp: pick('mcp') !== 'off',
+    runout: RUNOUT.find(m => m === pick('runout')) ?? 'warn',
   }
 }
 
@@ -364,10 +398,11 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'overalls', description: 'Set the Overalls band', argumentHint: USAGE })
     await refreshPonytail($, options)
-    // Redraw every 30 s, so reset countdowns and the agent count move while nothing else happens.
-    // A reload drops this environment's timers, so there is only ever the one.
+    // Redraw every 30 s, so reset countdowns and the agent count move while nothing else happens,
+    // and sample the limits for when they run out (a render can't write). A reload drops this
+    // environment's timers, so there is only ever the one.
     try {
-      $.clock.every(30_000, () => $.ui.invalidate('ui.render'))
+      $.clock.every(30_000, () => void sampleLimits($).finally(() => $.ui.invalidate('ui.render')))
     } catch {}
     return next(e)
   })
@@ -377,7 +412,7 @@ export const register: Register = (on, options) => {
     const value = field in FIELDS && (FIELDS[field as Field] as readonly string[]).includes(arg) ? arg : undefined
     if (value === undefined) {
       const p = await prefs($, options)
-      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
+      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, runout: ${p.runout}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}`
       return { text: `Overalls ${now}\nUsage: /overalls ${USAGE}` }
     }
     const deny = await setPref($, options, field, value)
@@ -450,13 +485,13 @@ export const register: Register = (on, options) => {
 
   // Don't name a local `h`: JSX compiles to the global h().
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials } = await prefs($, options)
+    const { detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials, runout } = await prefs($, options)
     const refused = showDenials ? await read($, denials) : []
     const down = mcp ? Object.entries(await read($, mcpDown)) : []
     const readings = detail === 'off' ? [] : await read($, history)
     const pony = ponyAs !== 'off' ? await read($, ponytail) : ''
     const cave = caveAs !== 'off' ? await read($, caveman) : ''
-    const usage = limits || cost ? await $.session.usage().catch(() => undefined) : undefined
+    const usage = limits || cost || runout !== 'off' ? await $.session.usage().catch(() => undefined) : undefined
     // With nothing else to show, ⚙ still draws alone, so both turned off can be turned on again.
     if (e.props.hasSurvey) return next(e)
     const els = $.ui.resolve(e)
@@ -536,6 +571,15 @@ export const register: Register = (on, options) => {
       : []
     const LIMIT = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' } as Record<string, string>
     const nowMs = await $.clock.now().catch(() => Date.now())
+    const samples = runout !== 'off' ? await read($, limitSamples) : {}
+    // Run-out at its pace: amber before the reset, red under 30 minutes; always also marks a limit
+    // that lasts. Nothing until there's a pace.
+    const runOut = (r: { kind: string; resetsAt?: string }) => {
+      const out = runout !== 'off' ? runsOutAt(samples[r.kind] ?? [], r.resetsAt) : undefined
+      return out === undefined ? []
+        : out === Infinity ? (runout === 'always' ? [<Text dimColor> ✓ lasts</Text>] : [])
+        : [<Text color={heat(out - nowMs < 30 * 60_000 ? 100 : 70)}> ⚠{untilReset(new Date(out).toISOString(), nowMs)}</Text>]
+    }
     // Subagents still running, the model's and plugins' alike; pressing the count lists them.
     const running = agents ? (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') : []
     const agentSegment = running.length
@@ -561,9 +605,17 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{LIMIT[r.kind] ?? r.kind} </Text>,
                 <Text color={heat(r.percentUsed)}>{Math.round(r.percentUsed)}%</Text>,
                 ...(resets && r.resetsAt ? [<Text dimColor> ↻{untilReset(r.resetsAt, nowMs)}</Text>] : []),
+                ...runOut(r),
               ]),
             ),
           ]
+        : []),
+      // With the limits off, each run-out stands alone under its limit's name.
+      ...(!limits && usage
+        ? usage.rateLimits.flatMap(r => {
+            const f = runOut(r)
+            return f.length ? [widget(<Text dimColor>{LIMIT[r.kind] ?? r.kind}</Text>, ...f)] : []
+          })
         : []),
       ...(cost && usage?.cost ? [widget(<Text dimColor>${usage.cost.usd.toFixed(2)}</Text>)] : []),
     ]
@@ -757,6 +809,7 @@ export const register: Register = (on, options) => {
                 {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
                 {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
                 {setting('denials', 'Denials', ONOFF.map(m => choice('denials', m, (m === 'on') === showDenials)))}
+                {setting('runout', 'Run-out', RUNOUT.map(m => choice('runout', m, m === runout)))}
               </Box>
             </Box>
           </Box>

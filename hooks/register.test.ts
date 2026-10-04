@@ -1,7 +1,7 @@
-import { test, expect } from 'claude-code/testing'
+import { test, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { bar, caveMode, contrast, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
+import { bar, caveMode, contrast, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, runsOutAt, sampled, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -312,7 +312,7 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Agents', 'Turns', 'Denials', 'Cost', 'MCP'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'Turns', 'Denials', 'Cost', 'MCP'])
   await ui.unmount()
 })
 
@@ -457,6 +457,68 @@ test('usage limits show when each resets, unless resets is off', { options: { we
   await ui.press({ key: 'resets-off' })
   await ui.press({ key: 'settings' })
   expect(await textOf(ui)).toBe('5h 42% · 7d 19%')
+  await ui.unmount()
+})
+
+test('a limit runs out at the pace of its last hour, or lasts until it resets', () => {
+  const t0 = Date.parse('2026-10-03T10:00:00Z')
+  const min = 60_000
+  let s = sampled([], t0, 40)
+  expect(sampled(s, t0 + 10_000, 41)).toBe(s) // under 25 s since the last: unchanged
+  s = sampled(s, t0 + 5 * min, 41)
+  expect(runsOutAt(s)).toBeUndefined() // under 10 minutes
+  expect(runsOutAt(sampled(s, t0 + 15 * min, 41))).toBeUndefined() // 1 point: noise
+  expect(runsOutAt(sampled([], t0, 41).concat({ at: t0 + 15 * min, pct: 41 }))).toBe(Infinity) // not moving: lasts
+  s = sampled(s, t0 + 20 * min, 50)
+  expect(runsOutAt(s)).toBe(t0 + 120 * min) // 10 points in 20 min, 50 left: 100 min more
+  expect(runsOutAt(s, '2026-10-03T11:00:00Z')).toBe(Infinity) // resets first
+  expect(runsOutAt(sampled(s, t0 + 21 * min, 51))).toBeDefined()
+  expect(sampled(s, t0 + 21 * min, 3)).toEqual([{ at: t0 + 21 * min, pct: 3 }]) // a reset starts over
+  expect(sampled(s, t0 + 61 * min, 60).map(x => x.pct)).toEqual([41, 50, 60]) // over an hour old: dropped
+})
+
+// A session whose clock the test moves, with the five-hour limit at `pct()`: the 30 s tick samples it.
+const limitSession = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], pct: () => number) => {
+  memStore(on)
+  on('config.list', () => ({ value: [] }))
+  on('settings.read', () => ({ value: {} }))
+  on('session.start', (_$, e) => e)
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:00:00Z') })
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct(), resetsAt: '2026-10-03T13:00:00Z' }] } }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  return clock
+}
+
+test('a limit that runs out before it resets says when, red under 30 minutes', { options: { weather: 'off', ponytail: 'off', limits: 'on', agents: 'off' } }, async ($, on) => {
+  let pct = 40
+  const clock = await limitSession($, on, () => pct)
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  await clock.advance(30_000)
+  expect(await textOf(ui)).toBe('5h 40% ↻3h') // one sample: no pace yet
+  await clock.advance(20 * 60_000 - 30_000)
+  pct = 50
+  await clock.advance(30_000)
+  // 10 points in the 20 minutes since the first sample; 50 left at that pace is 100 minutes.
+  expect(await textOf(ui)).toBe('5h 50% ↻2h40m ⚠1h40m')
+  const warn = (await ui.findAll({ type: 'Text' })).find(t => t.text === ' ⚠1h40m')
+  expect(warn?.props.color).toBe(heat(70))
+  pct = 90
+  await clock.advance(30_000)
+  const red = (await ui.findAll({ type: 'Text' })).find(t => t.text.startsWith(' ⚠'))
+  expect(red?.props.color).toBe(heat(100))
+  await ui.unmount()
+})
+
+test('run-out stands alone with the limits off, and always marks a limit that lasts', { options: { weather: 'off', ponytail: 'off', limits: 'off', agents: 'off', runout: 'always' } }, async ($, on) => {
+  const clock = await limitSession($, on, () => 40)
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  await clock.advance(15 * 60_000)
+  expect(await textOf(ui)).toBe('5h ✓ lasts')
+  await ui.press({ key: 'settings' })
+  await ui.press({ key: 'runout-off' })
+  await ui.press({ key: 'settings' })
+  expect(await textOf(ui)).toBe('')
   await ui.unmount()
 })
 
