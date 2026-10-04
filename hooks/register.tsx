@@ -872,7 +872,9 @@ export const register: Register = (on, options) => {
         ...ponySegment,
       ],
       ...(percent >= COMPACT_AT && !e.props.isWorking
-        ? [<Button key="compact" label="Compact" variant="primary" onPress={compact} />]
+        ? // Started, not awaited: compacting a large context outlasts a press's 10 s budget, and the
+          // session.compact hook records the drop whenever it finishes.
+          [<Button key="compact" label="Compact" variant="primary" onPress={() => void compact()} />]
         : []),
     )
   })
