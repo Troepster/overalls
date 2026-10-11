@@ -1,7 +1,8 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
+import type { Beat } from '../types'
 
-import { bar, caveMode, contrast, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, runsOutAt, sampled, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
+import { accountLimits, ago, bar, caveMode, contrast, liveBeats, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, runsOutAt, sampled, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -312,7 +313,7 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'View', 'Turns', 'Denials', 'Cost', 'MCP'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'View', 'Sessions', 'Turns', 'Denials', 'Cost', 'MCP'])
   // Each card ends with its command.
   const view = (await ui.findAll({ type: 'Text' })).find(t => t.props.inverse && t.text.trim().startsWith('View:'))
   expect(view?.text.trim().endsWith('/overalls view bar|pane|both')).toBe(true)
@@ -480,7 +481,8 @@ test('a limit runs out at the pace of its last hour, or lasts until it resets', 
   expect(sampled(s, t0 + 61 * min, 60).map(x => x.pct)).toEqual([41, 50, 60]) // over an hour old: dropped
 })
 
-// A session whose clock the test moves, with the five-hour limit at `pct()`: the 30 s tick samples it.
+// A session whose clock the test moves, with the five-hour limit at `pct()`; `measure()` is a
+// response reporting it, the only time it's sampled.
 const limitSession = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], pct: () => number) => {
   memStore(on)
   on('config.list', () => ({ value: [] }))
@@ -488,35 +490,54 @@ const limitSession = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>
   on('session.start', (_$, e) => e)
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   const clock = mock.clock(on, { now: Date.parse('2026-10-03T10:00:00Z') })
-  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct(), resetsAt: '2026-10-03T13:00:00Z' }] } }))
+  const limits = () => [{ kind: 'five_hour' as const, percentUsed: pct(), resetsAt: '2026-10-03T13:00:00Z' }]
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: limits() } }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  return clock
+  const measure = () => $.session.measure({ context: { window: 200000 }, rateLimits: limits(), changed: ['rateLimits'] } as never)
+  return { clock, measure }
 }
 
 test('a limit that runs out before it resets says when, red under 30 minutes', { options: { weather: 'off', ponytail: 'off', limits: 'on', agents: 'off' } }, async ($, on) => {
   let pct = 40
-  const clock = await limitSession($, on, () => pct)
+  const { clock, measure } = await limitSession($, on, () => pct)
   const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
   await clock.advance(30_000)
+  await measure()
   expect(await textOf(ui)).toBe('5h 40% ↻3h') // one sample: no pace yet
-  await clock.advance(20 * 60_000 - 30_000)
+  await clock.advance(20 * 60_000)
   pct = 50
-  await clock.advance(30_000)
+  await measure()
   // 10 points in the 20 minutes since the first sample; 50 left at that pace is 100 minutes.
   expect(await textOf(ui)).toBe('5h 50% ↻2h40m ⚠1h40m')
   const warn = (await ui.findAll({ type: 'Text' })).find(t => t.text === ' ⚠1h40m')
   expect(warn?.props.color).toBe(heat(70))
   pct = 90
   await clock.advance(30_000)
+  await measure()
   const red = (await ui.findAll({ type: 'Text' })).find(t => t.text.startsWith(' ⚠'))
   expect(red?.props.color).toBe(heat(100))
   await ui.unmount()
 })
 
-test('run-out stands alone with the limits off, and always marks a limit that lasts', { options: { weather: 'off', ponytail: 'off', limits: 'off', agents: 'off', runout: 'always' } }, async ($, on) => {
-  const clock = await limitSession($, on, () => 40)
+test("an idle session's old figure is not sampled, so the first reply after a break is no burst", { options: { weather: 'off', ponytail: 'off', limits: 'on', agents: 'off' } }, async ($, on) => {
+  let pct = 30
+  const { clock, measure } = await limitSession($, on, () => pct)
   const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  await measure()
+  await clock.advance(90 * 60_000) // away: the session still reports 30%, other sessions use the limit
+  pct = 60
+  await measure()
+  expect(await textOf(ui)).not.toContain('⚠') // one sample in the last hour: no pace
+  await ui.unmount()
+})
+
+test('run-out stands alone with the limits off, and always marks a limit that lasts', { options: { weather: 'off', ponytail: 'off', limits: 'off', agents: 'off', runout: 'always' } }, async ($, on) => {
+  const { clock, measure } = await limitSession($, on, () => 40)
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  await measure()
   await clock.advance(15 * 60_000)
+  await measure()
   expect(await textOf(ui)).toBe('5h ✓ lasts')
   await ui.press({ key: 'settings' })
   await ui.press({ key: 'runout-off' })
@@ -750,4 +771,69 @@ test('the view shows Overalls as the band, a Pane with everything, or both', { o
 
   await run('view bar')
   expect(panes).toEqual(['open overalls', 'close overalls'])
+})
+
+test('live sessions: written to in the last 2 minutes and not ended, this one first', () => {
+  const beat = (id: string, project: string, at: number, ended = false) =>
+    ({ id, project, cwd: `/p/${project}`, model: 'm', limits: [], agents: 0, mcp: [], denials: 0, ponytail: '', caveman: '', at, ended })
+  const now = 1_000_000
+  const beats = [beat('b', 'zeta', now - 10_000), beat('me', 'mine', now - 5_000), beat('c', 'alpha', now - 200_000), beat('d', 'beta', now, true), beat('e', 'alpha', now - 1_000)]
+  expect(liveBeats(beats, now, 'me').map(b => b.id)).toEqual(['me', 'e', 'b'])
+  expect([0, 12_400, 59_000, 125_000].map(ago)).toEqual(['0s', '12s', '59s', '2m'])
+})
+
+test('the account limits: per limit the most recently measured, an unmeasured one last', () => {
+  const beat = (limits: Beat['limits']) => ({ limits }) as Beat
+  expect(accountLimits([
+    beat([{ kind: 'five_hour', percent: 30, at: 100 }, { kind: 'seven_day', percent: 50, at: 100 }]),
+    beat([{ kind: 'five_hour', percent: 49, at: 200 }, { kind: 'seven_day', percent: 55, at: 0 }]),
+  ])).toEqual([{ kind: 'five_hour', percent: 49, at: 200 }, { kind: 'seven_day', percent: 50, at: 100 }])
+})
+
+test('each session writes its status to a file of its own, and the Sessions Pane reads them all', { options: { ponytail: 'off', limits: 'off' } }, async ($, on) => {
+  memStore(on)
+  const files: Record<string, string> = {
+    '/home/u/.claude/overalls/sessions/other.json': JSON.stringify({ id: 'other', project: 'shop', cwd: '/w/shop', model: 'opus', percent: 91, limits: [{ kind: 'five_hour', percent: 40 }], agents: 2, mcp: ['Gmail'], denials: 1, ponytail: 'lite', caveman: '', at: 995_000, ended: false, host: 'local_abc' }),
+  }
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/u' : e.name === 'CLAUDE_CODE_HOST_SESSION_ID' ? 'local_me' : undefined }))
+  const opened: string[][] = []
+  const titles = '{"type":"custom-title","customTitle":"First name"}\n{"type":"custom-title","customTitle":"Mod display"}\n'
+  on('process.run', (_$, e) => {
+    opened.push([...e.argv])
+    const stdout = e.argv[0] === 'grep' && e.argv.at(-1) === '/home/u/.claude/projects/-w-overalls/me.jsonl' ? titles : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.root', () => ({ value: '/w/overalls' }))
+  on('session.id', () => ({ value: 'me' }))
+  on('session.cwd', () => ({ value: '/w/overalls' }))
+  on('session.model', () => ({ value: 'opus' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 50000, window: 200000 }, rateLimits: [] } }))
+  on('agent.list', () => ({ value: [] }))
+  on('clock.now', () => ({ value: 1_000_000 }))
+  on('fs.write', (_$, e) => ((files[e.path] = e.text), { value: undefined }))
+  on('fs.list', (_$, e) => ({ value: Object.keys(files).filter(f => f.startsWith(`${e.path}/`)).map(f => ({ name: f.slice(e.path!.length + 1), kind: 'file' as const, size: 1 })) as never }))
+  on('fs.read', (_$, e) => { const value = files[e.path]; return value !== undefined ? { value } : { deny: 'ENOENT' } })
+  on('session.start', (_$, e) => e)
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/w/overalls', surface: 'desktop', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  const mine = JSON.parse(files['/home/u/.claude/overalls/sessions/me.json']!)
+  expect(mine).toMatchObject({ id: 'me', project: 'overalls', percent: 25, ended: false, host: 'local_me', title: 'Mod display' })
+
+  const pane = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'Pane', requestId: 'overalls-sessions', props: { isFocused: false } as never })
+  const texts = (await pane.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts[0]).toContain('2 live sessions')
+  expect(texts).toContain('▶ Mod display') // this one first, marked, by its latest title
+  expect(texts).toContain('overalls') // then its project
+  expect(texts).toContain('shop')
+  expect(texts).toContain('⚠ Gmail')
+  expect(texts).toContain('5s ago')
+  expect(texts).toContain('Limits') // once for the account, not per card
+  expect(texts.filter(t => t === '5h 40%')).toHaveLength(1)
+  // Open switches to the other session in the app; this one has none.
+  expect(await pane.findAll({ key: 'session-open-me' })).toHaveLength(0)
+  await pane.press({ key: 'session-open-other' })
+  expect(opened.at(-1)).toEqual(['open', 'claude://claude.ai/epitaxy/local_abc'])
+  await pane.unmount()
 })

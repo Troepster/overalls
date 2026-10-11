@@ -27,6 +27,12 @@
       "description": "Where Overalls shows: bar (above the prompt), pane, or both",
       "default": "bar"
     },
+    "sessions": {
+      "type": "string",
+      "title": "Sessions",
+      "description": "Share this session's status with the Sessions Pane, which lists every open session running Overalls: on or off",
+      "default": "on"
+    },
     "weather": {
       "type": "string",
       "title": "Weather detail",
