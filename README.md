@@ -83,6 +83,7 @@ you set the same setting with `/overalls` in a session that has the row.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
+| Sessions | `on` · `off` | `on` | Share this session's status with the **Sessions** Pane, which lists every open session running Overalls; **Open** in the Config box (or `/overalls sessions`) shows it |
 | View | `bar` · `pane` · `both` | `bar` | Where Overalls shows: the band above the prompt, a Pane with everything at full size (it opens by itself only in a wide enough window), or both |
 | Weather detail | `off` · `minimal` · `normal` · `full` (typed; anything else counts as `full`) | `full` | How much of the forecast to show |
 | Ponytail level | `off` · `icon` · `text` (typed; anything else counts as `icon`, and an old on/off value as `icon`/`off`) | `icon` | Show whether Ponytail is installed and its level, after its logo or the word `ponytail:` |
@@ -178,6 +179,23 @@ server: its name, `sign in` or `failed`, the error as Claude saw it, and:
 A server leaves the list on its next successful call, or when dismissed. It's
 caught on its first failure, not before.
 
+## Sessions
+
+Claude Code gives a mod no list of other sessions, so each session running
+Overalls writes its status to a small file of its own,
+`overalls/sessions/<session id>.json` in your Claude config directory, every 30
+seconds and after each turn. The **Sessions** Pane (**Open** on the Sessions row
+of the Config box, or `/overalls sessions`) reads them all and shows one card per
+live session: its title, project and folder, model, context and turns left, cost,
+running agents, MCP errors, tool denials, and the Ponytail and Caveman levels,
+yours marked ▶. The usage limits are your account's, so they sit on one line
+above the cards, each from the session that heard it most recently. In the desktop app, **Open ↗** on another session's card switches
+to it.
+
+A session that ends marks its file ended; one that stops writing (closed
+without ending, crashed) drops off after two minutes. Only sessions running
+Overalls show up. Turn **Sessions** off to stop writing the file.
+
 ## Data and access
 
 Overalls makes no network requests and sends nothing anywhere. Everything it
@@ -191,9 +209,9 @@ does stays inside your Claude Code session:
 - reads the session's list of subagents (`$.agent.list()`: type, task, status)
   when the agents widget is on
 - redraws the band every 30 seconds, so countdowns and the agent count stay
-  current, and at each redraw notes the usage-limit percentages
-  (`$.session.usage()`), keeping the last hour of them in session memory to
-  tell when a limit will run out
+  current, and notes the usage-limit percentages each time a response reports
+  them, keeping the last hour of them in session memory to tell when a limit
+  will run out
 - reads your Claude Code settings to see whether Caveman is enabled and, if it
   is, this session's id and Caveman's mode file for it in your Claude config
   directory: `.caveman-sessions/<session id>.mode` (or `.caveman-active` when
@@ -234,10 +252,22 @@ does stays inside your Claude Code session:
   store, a small JSON file Claude Code keeps for the plugin in your Claude config
   directory.
 
-Apart from that store, it writes no files, and the only program it starts is that
-system opener, with that one fixed address, when you press **Reconnect**.
+Apart from that store, the only files it writes are its session status files
+(`overalls/sessions/<session id>.json` in your Claude config directory: the
+session's title, project folder, model, context, limits, cost, counts of agents, MCP errors and denials,
+the Ponytail and Caveman levels, the desktop app's id for the session from
+`CLAUDE_CODE_HOST_SESSION_ID`, and when; never prompts or replies), which it
+also reads to draw the Sessions Pane. For the title it runs `grep` on this
+session's own transcript (`projects/<project>/<session id>.jsonl` in your
+Claude config directory) at the start and after each turn, matching only the
+rows that hold the title the desktop app or `/rename` gave it; nothing else of
+the transcript is read. The only other program it starts is the system opener,
+in the desktop app: for Customize › Connectors when you press **Reconnect**, and
+for another session when you press **Open ↗** on its card.
 
-It hooks four events only to observe them, never changing what they carry:
+It hooks six events only to observe them, never changing what they carry:
+`session.end` (mark this session's status file ended), `session.measure`
+(note the usage-limit percentages a response reported),
 `tool.call` (note an MCP server failing or answering again, and a refused call), `turn.complete`
 (take a reading), `session.compact` (record the drop after a
 compaction, and reset the Ponytail level to its default) and `prompt.submit`

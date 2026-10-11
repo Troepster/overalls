@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Denial, McpTrouble, Reading, Sample } from '../types'
+import type { Beat, Denial, McpTrouble, Reading, Sample } from '../types'
 import { PONYTAIL_PNG } from './ponytail-icon'
 
 const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Reading[])
@@ -13,7 +13,10 @@ const mcpDown = atom({ plugin: 'overalls', key: 'mcpDown' } as const, {} as Reco
 const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents' | 'denials')
 const denials = atom({ plugin: 'overalls', key: 'denials' } as const, [] as Denial[])
 // Each usage limit's percent over the last hour, by kind, for when it runs out.
-const limitSamples = atom({ plugin: 'overalls', key: 'limitSamples' } as const, {} as Record<string, Sample[]>)
+// Was limitSamples, polled every 30 s; renamed so a running session drops those stale figures.
+const limitSamples = atom({ plugin: 'overalls', key: 'limitMeasures' } as const, {} as Record<string, Sample[]>)
+// The session's title, for the Sessions Pane; read after each turn, not on every heartbeat.
+const title = atom({ plugin: 'overalls', key: 'title' } as const, '')
 
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
@@ -22,7 +25,7 @@ const ONOFF = ['on', 'off'] as const
 const RUNOUT = ['off', 'warn', 'always'] as const
 // Every setting and what it takes, in /overalls, the Config box and userConfig alike.
 const VIEWS = ['bar', 'pane', 'both'] as const
-const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF, runout: RUNOUT, view: VIEWS } as const
+const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF, runout: RUNOUT, view: VIEWS, sessions: ONOFF } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
@@ -37,6 +40,7 @@ const TIPS = {
   'cfg-runout': 'Run-out: when a limit runs out before it resets, at your pace over the last hour; always also marks one that lasts',
   'cfg-agents': 'Agents: how many subagents are running; press it to see them',
   'cfg-view': 'View: the band above the prompt, a Pane with everything at full size, or both',
+  'cfg-sessions': 'Sessions: every open session running Overalls, in a Pane; each writes its status to a small file',
   'cfg-turns': 'Turns: about how many more turns fit, at the pace of the last few',
   'cfg-denials': 'Denials: tool calls that were refused (by you, a hook or a permission rule); press it to see them',
   'cfg-cost': 'Cost: what this session has cost so far',
@@ -190,12 +194,15 @@ export const CONNECTORS_URL = 'https://claude.ai/customize/connectors'
 // goes to the system's opener; the CLI and the web get the https link, the web's own site.
 const CONNECTORS_APP_URL = 'claude://claude.ai/customize/connectors'
 const OPENERS = [['open'], ['xdg-open'], ['cmd', '/c', 'start', '']] // macOS, Linux, Windows
-async function openConnectors($: EngineInterface) {
+async function openApp($: EngineInterface, url: string) {
   for (const opener of OPENERS) {
-    const r = await $.process.run([...opener, CONNECTORS_APP_URL]).catch(() => undefined)
-    if (r?.exitCode === 0) return
+    const r = await $.process.run([...opener, url]).catch(() => undefined)
+    if (r?.exitCode === 0) return true
   }
-  $.ui.toast(`Sign the connector back in at ${CONNECTORS_URL}`)
+  return false
+}
+async function openConnectors($: EngineInterface) {
+  if (!(await openApp($, CONNECTORS_APP_URL))) $.ui.toast(`Sign the connector back in at ${CONNECTORS_URL}`)
 }
 
 // claude_ai_Gmail → Gmail, plugin_productivity_atlassian → atlassian; a connector id is cut short.
@@ -343,9 +350,107 @@ async function recordDrop($: EngineInterface, tokensAfter?: number) {
   })
 }
 
-async function sampleLimits($: EngineInterface) {
-  const limits = (await $.session.usage().catch(() => undefined))?.rateLimits
-  if (!limits?.length) return
+// No API lists other sessions, so each session running Overalls writes its status to a file of
+// its own, <claude dir>/overalls/sessions/<session id>.json (one file each, so two sessions never
+// overwrite each other), and the Sessions Pane reads them all. Every 30 s and every turn; a
+// session that stops writing drops off after LIVE_MS, and one that ends says so.
+const LIVE_MS = 120_000
+const beatsDir = async ($: EngineInterface) => `${await claudeDir($)}/overalls/sessions`
+
+// The title the desktop app or /rename gives a session: the last custom-title row of its transcript,
+// projects/<project root, non-alphanumerics as ->/<session id>.jsonl, found with grep as a
+// transcript outgrows fs.read's 4 MiB. ponytail: Claude Code cuts and hashes a project path over
+// 200 characters, and Windows has no grep; no title there.
+async function refreshTitle($: EngineInterface, options: Options) {
+  if (!(await prefs($, options)).sessions) return
+  const [dir, id, root] = await Promise.all([claudeDir($), $.session.id(), $.session.root()])
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return
+  const path = `${dir}/projects/${root.replace(/[^A-Za-z0-9]/g, '-')}/${id}.jsonl`
+  const found = await $.process.run(['grep', '-a', '-F', '"type":"custom-title"', path]).catch(() => undefined)
+  const last = found?.stdout.trim().split('\n').at(-1)
+  if (!last) return
+  try {
+    const named = JSON.parse(last).customTitle
+    if (typeof named === 'string') await update($, title, () => named.slice(0, 120))
+  } catch {}
+}
+
+async function heartbeat($: EngineInterface, options: Options, ended = false) {
+  if (!(await prefs($, options)).sessions) return
+  const id = await $.session.id()
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return
+  const [cwd, model, readings, usage, agents, down, refused, pony, cave, at, host, measured, named] = await Promise.all([
+    $.session.cwd(),
+    $.session.model().catch(() => ''),
+    read($, history),
+    $.session.usage().catch(() => undefined),
+    $.agent.list().catch(() => []),
+    read($, mcpDown),
+    read($, denials),
+    read($, ponytail),
+    read($, caveman),
+    $.clock.now().catch(() => Date.now()),
+    // The desktop app's own id for the session (local_…), which its links open; the CLI has none.
+    $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined),
+    read($, limitSamples),
+    read($, title),
+  ])
+  const now = readings.at(-1)
+  const beat: Beat = {
+    id,
+    title: named,
+    project: cwd.split('/').filter(Boolean).at(-1) ?? cwd,
+    cwd,
+    model,
+    percent: now ? Math.round(pct(now)) : undefined,
+    turnsLeft: turnsLeft(readings),
+    // With when a response last reported each, so the Pane can take the freshest across sessions.
+    limits: (usage?.rateLimits ?? []).map(r => ({ kind: r.kind, percent: Math.round(r.percentUsed), at: measured[r.kind]?.at(-1)?.at ?? 0 })),
+    cost: usage?.cost?.usd,
+    agents: agents.filter(a => a.status === 'running').length,
+    mcp: Object.keys(down).map(mcpLabel),
+    denials: refused.length,
+    ponytail: pony,
+    caveman: cave,
+    at,
+    ended,
+    host: host && /^[A-Za-z0-9_-]{1,128}$/.test(host) ? host : undefined,
+  }
+  await $.fs.write(`${await beatsDir($)}/${id}.json`, JSON.stringify(beat))
+}
+
+// The sessions written to in the last LIVE_MS that haven't ended, this one first.
+export const liveBeats = (beats: Beat[], now: number, self: string) =>
+  beats
+    .filter(b => !b.ended && now - b.at < LIVE_MS)
+    .sort((a, b) => Number(b.id === self) - Number(a.id === self) || a.project.localeCompare(b.project))
+
+async function readBeats($: EngineInterface) {
+  const dir = await beatsDir($)
+  const files = (await $.fs.list(dir).catch(() => [])).filter(f => f.kind === 'file' && f.name.endsWith('.json'))
+  const beats = await Promise.all(
+    files.map(f => $.fs.read(`${dir}/${f.name}`).then(t => JSON.parse(String(t)) as Beat, () => undefined)),
+  )
+  return beats.filter((b): b is Beat => !!b && typeof b.at === 'number')
+}
+
+// The limits are the account's, each session's only as fresh as its last response: per limit, the
+// most recently measured figure.
+export const accountLimits = (beats: Beat[]) => {
+  const best = new Map<string, Beat['limits'][number]>()
+  for (const l of beats.flatMap(b => b.limits)) {
+    const had = best.get(l.kind)
+    if (!had || (l.at ?? 0) > (had.at ?? 0) || (l.at === had.at && l.percent > had.percent)) best.set(l.kind, l)
+  }
+  return [...best.values()]
+}
+
+export const ago = (ms: number) => (ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s` : `${Math.round(ms / 60_000)}m`)
+
+// Only from a measurement: a session's limits are its last response's, so polling an idle one
+// stamps an old figure with a new time, and the first reply after a break reads as a burst.
+async function sampleLimits($: EngineInterface, limits: { kind: string; percentUsed: number }[]) {
+  if (!limits.length) return
   const now = await $.clock.now().catch(() => Date.now())
   await update($, limitSamples, prev => Object.fromEntries(limits.map(r => [r.kind, sampled(prev[r.kind] ?? [], now, r.percentUsed)])))
 }
@@ -365,6 +470,7 @@ async function prefs($: EngineInterface, options: Options) {
   const pick = (f: Field) => String(saved[f] ?? options[f]).trim().toLowerCase()
   return {
     view: VIEWS.find(v => v === pick('view')) ?? 'bar',
+    sessions: pick('sessions') !== 'off',
     detail: DETAILS.find(d => d === pick('weather')) ?? 'full',
     pony: ponyMode(saved.ponytail ?? options.ponytail),
     cave: ponyMode(saved.caveman ?? options.caveman),
@@ -407,7 +513,7 @@ async function setPref($: EngineInterface, options: Options, field: string, valu
 // same way under the ⚙ row and the MCP errors, denials and agents boxes are always open.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, inPane: boolean, options: Options) {
-  const { view, detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials, runout } = await prefs($, options)
+  const { view, sessions, detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials, runout } = await prefs($, options)
   const refused = showDenials ? await read($, denials) : []
   const down = mcp ? Object.entries(await read($, mcpDown)) : []
   const readings = detail === 'off' ? [] : await read($, history)
@@ -741,6 +847,11 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
       </Box>
       <Box flexDirection="column" width={inPane ? '100%' : '50%'} borderStyle="round" borderDimColor paddingX={1}>
         {setting('view', 'View', VIEWS.map(v => choice('view', v, v === view)))}
+        {setting('sessions', 'Sessions', [
+          ...ONOFF.map(m => choice('sessions', m, (m === 'on') === sessions)),
+          <Text dimColor>│</Text>,
+          <Button key="sessions-open" label="Open" plain onPress={() => void $.ui.open({ id: 'overalls-sessions', title: 'Sessions' })} />,
+        ])}
         {setting('ponytail', 'Ponytail', [...PONY.map(m => choice('ponytail', m, m === ponyAs)), ...installPonytail])}
         {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
         {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
@@ -835,27 +946,95 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
   )
 }
 
+// A desktop session opens in the app from its claude:// link, as the app's own session links do.
+export const sessionLink = (host: string) => `claude://claude.ai/epitaxy/${host}`
+async function openSession($: EngineInterface, host: string) {
+  if (!(await openApp($, sessionLink(host)))) $.ui.toast(`Open it from the sidebar: ${sessionLink(host)}`)
+}
+
+// Every live session running Overalls: one bordered card each, this one marked, warnings in red.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function drawSessions($: EngineInterface, e: any) {
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const [now, self] = await Promise.all([$.clock.now().catch(() => Date.now()), $.session.id()])
+  const beats = liveBeats(await readBeats($), now, self)
+  const account = accountLimits(beats)
+  const LIMIT = { five_hour: '5h', seven_day: '7d', spend_limit: 'spend' } as Record<string, string>
+  return (
+    <Box flexDirection="column" gap={1} width="100%">
+      <Text dimColor>
+        {beats.length} live session{beats.length === 1 ? '' : 's'} running Overalls · updated every 30 s
+      </Text>
+      {...(account.length
+        ? [
+            <Box flexDirection="row" columnGap={2} flexWrap="wrap">
+              <Text bold>Limits</Text>
+              {...account.map(l => <Text color={heat(l.percent)}>{LIMIT[l.kind] ?? l.kind} {l.percent}%</Text>)}
+            </Box>,
+          ]
+        : [])}
+      {...beats.map(b => (
+        <Box flexDirection="column" borderStyle="round" borderDimColor={b.id !== self} paddingX={1}>
+          <Box flexDirection="row" gap={2} flexWrap="wrap">
+            <Text bold>{b.id === self ? '▶ ' : ''}{b.title || b.project}</Text>
+            {...(b.host && b.id !== self
+              ? [<Button key={`session-open-${b.id}`} label="Open ↗" onPress={() => void openSession($, b.host!)} />]
+              : [])}
+            {...(b.title ? [<Text dimColor>{b.project}</Text>] : [])}
+            <Text dimColor>{b.model}</Text>
+            <Box flexDirection="row" flexGrow={1} />
+            <Text dimColor>{ago(now - b.at)} ago</Text>
+          </Box>
+          <Box flexDirection="row" columnGap={2} flexWrap="wrap">
+            {...(b.percent !== undefined ? [<Text color={heat(b.percent)}>☂ {b.percent}%</Text>] : [])}
+            {...(b.turnsLeft !== undefined ? [<Text dimColor>⌛ ~{b.turnsLeft}</Text>] : [])}
+            {...(b.cost !== undefined ? [<Text dimColor>${b.cost.toFixed(2)}</Text>] : [])}
+            {...(b.agents ? [<Text dimColor>⧗ {b.agents}</Text>] : [])}
+            {...(b.mcp.length ? [<Text color={heat(100)}>⚠ {b.mcp.join(', ')}</Text>] : [])}
+            {...(b.denials ? [<Text color={heat(100)}>⛔ {b.denials}</Text>] : [])}
+            {...(b.ponytail && b.ponytail !== 'not installed' ? [<Text dimColor>ponytail {b.ponytail}</Text>] : [])}
+            {...(b.caveman ? [<Text dimColor>caveman {b.caveman}</Text>] : [])}
+          </Box>
+          <Text dimColor>{b.cwd}</Text>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'overalls', description: 'Set the Overalls band', argumentHint: USAGE })
     await refreshPonytail($, options)
     // Opened unasked, a Pane seats only where the window is wide enough (144 columns).
     if ((await prefs($, options)).view !== 'bar') await applyView($, 'pane')
-    // Redraw every 30 s, so reset countdowns and the agent count move while nothing else happens,
-    // and sample the limits for when they run out (a render can't write). A reload drops this
-    // environment's timers, so there is only ever the one.
+    await refreshTitle($, options).catch(() => {})
+    await heartbeat($, options).catch(() => {})
+    // Redraw every 30 s, so reset countdowns and the agent count move while nothing else happens.
+    // A reload drops this environment's timers, so there is only ever the one.
     try {
-      $.clock.every(30_000, () => void sampleLimits($).finally(() => $.ui.invalidate('ui.render')))
+      $.clock.every(30_000, () => void heartbeat($, options).catch(() => {}).finally(() => $.ui.invalidate('ui.render')))
     } catch {}
+    return next(e)
+  })
+
+  // After each turn, and when a limit moves a point: fresh limits to sample for when they run out
+  // (a render can't write).
+  on('session.measure', async ($, e, next) => {
+    await sampleLimits($, e.rateLimits).catch(() => {})
     return next(e)
   })
 
   on('command.run', { command: 'overalls' }, async ($, e) => {
     const [field = '', arg = ''] = e.args.trim().toLowerCase().split(/\s+/)
+    if (field === 'sessions' && !arg) {
+      await $.ui.open({ id: 'overalls-sessions', title: 'Sessions' })
+      return { text: 'Opened the Sessions Pane' }
+    }
     const value = field in FIELDS && (FIELDS[field as Field] as readonly string[]).includes(arg) ? arg : undefined
     if (value === undefined) {
       const p = await prefs($, options)
-      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, runout: ${p.runout}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}, view: ${p.view}`
+      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, runout: ${p.runout}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}, view: ${p.view}, sessions: ${p.sessions ? 'on' : 'off'}`
       return { text: `Overalls ${now}\nUsage: /overalls ${USAGE}` }
     }
     const deny = await setPref($, options, field, value)
@@ -912,6 +1091,14 @@ export const register: Register = (on, options) => {
       await update($, history, prev => [...prev, reading].slice(-12))
     }
     await refreshPonytail($, options)
+    await refreshTitle($, options).catch(() => {})
+    await heartbeat($, options).catch(() => {})
+    return next(e)
+  })
+
+  // A session that ends says so, rather than waiting to drop off.
+  on('session.end', async ($, e, next) => {
+    await heartbeat($, options, true).catch(() => {})
     return next(e)
   })
 
@@ -931,4 +1118,5 @@ export const register: Register = (on, options) => {
     (await prefs($, options)).view === 'pane' ? next(e) : draw($, e, next, false, options),
   )
   on('ui.render', { component: 'Pane', requestId: 'overalls' }, ($, e, next) => draw($, e, next, true, options))
+  on('ui.render', { component: 'Pane', requestId: 'overalls-sessions' }, ($, e) => drawSessions($, e))
 }

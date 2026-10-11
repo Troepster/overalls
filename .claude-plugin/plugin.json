@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -26,6 +26,12 @@
       "title": "View",
       "description": "Where Overalls shows: bar (above the prompt), pane, or both",
       "default": "bar"
+    },
+    "sessions": {
+      "type": "string",
+      "title": "Sessions",
+      "description": "Share this session's status with the Sessions Pane, which lists every open session running Overalls: on or off",
+      "default": "on"
     },
     "weather": {
       "type": "string",
