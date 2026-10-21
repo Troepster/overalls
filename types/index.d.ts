@@ -4,11 +4,13 @@ export type Denial = { tool: string; reason: string }
 export type Sample = { at: number; pct: number }
 export type Recap = { text: string; at: number; busy: boolean }
 export type Unread = { host: string; title: string; at: number }
-export type Activity = { ask: string; endedAt: number; awayMs: number }
+export type Activity = { ask: string; endedAt: number; awayMs: number; busy: boolean }
 export type Beat = {
   id: string
   title?: string
   ask?: string
+  busy?: boolean
+  endedAt?: number
   project: string
   cwd: string
   model: string

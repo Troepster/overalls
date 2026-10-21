@@ -20,7 +20,7 @@ const title = atom({ plugin: 'overalls', key: 'title' } as const, '')
 // The last recap of the session, and whether one is being written.
 const recap = atom({ plugin: 'overalls', key: 'recap' } as const, { text: '', at: 0, busy: false } as Recap)
 // The last prompt's first line, when the last turn ended and how long the gap before this one was.
-const activity = atom({ plugin: 'overalls', key: 'activity' } as const, { ask: '', endedAt: 0, awayMs: 0 } as Activity)
+const activity = atom({ plugin: 'overalls', key: 'activity' } as const, { ask: '', endedAt: 0, awayMs: 0, busy: false } as Activity)
 // The desktop app's unread sessions, oldest first; read on the 30 s tick, not while drawing.
 const unread = atom({ plugin: 'overalls', key: 'unread' } as const, [] as Unread[])
 
@@ -34,6 +34,9 @@ const VIEWS = ['bar', 'pane', 'both'] as const
 const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF, runout: RUNOUT, view: VIEWS, sessions: ONOFF, lasttask: ONOFF, recap: ONOFF, autorecap: ONOFF, unread: ONOFF } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
+// The desktop sidebar's unread dot. An emoji, as a Button draws its label in its own colour on
+// the desktop (a coloured Text inside it came out black).
+const UNREAD_DOT = '🟠'
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
 // a card can't leave the band, so there it covers the forecast it would explain.
 const TIPS = {
@@ -47,7 +50,7 @@ const TIPS = {
   'cfg-agents': 'Agents: how many subagents are running; press it to see them',
   'cfg-view': 'View: the band above the prompt, a Pane with everything at full size, or both',
   'cfg-sessions': 'Sessions: every open session running Overalls, in a Pane; each writes its status to a small file',
-  'cfg-unread': 'Unread: the desktop session that has waited longest since you last looked; press it to go there',
+  'cfg-unread': 'Unread: an orange dot before ⚙ while a desktop session waits unread; press it to go to the one that has waited longest',
   'cfg-lasttask': "Last task: your last prompt's first line on this session's card in the Sessions Pane",
   'cfg-recap': 'Recap: a button that has Claude sum up where this session is, for coming back to it',
   'cfg-autorecap': 'Auto: a recap without asking, after a turn that ran 10 minutes or followed a 30-minute break',
@@ -412,6 +415,8 @@ async function heartbeat($: EngineInterface, options: Options, ended = false) {
     id,
     title: named,
     ask: lasttask && done.ask ? done.ask : undefined,
+    busy: done.busy,
+    endedAt: done.endedAt || undefined,
     project: cwd.split('/').filter(Boolean).at(-1) ?? cwd,
     cwd,
     model,
@@ -432,25 +437,33 @@ async function heartbeat($: EngineInterface, options: Options, ended = false) {
   await $.fs.write(`${await beatsDir($)}/${id}.json`, JSON.stringify(beat))
 }
 
-// The desktop app keeps a record of each session (on macOS, under Application Support): a turn
-// edge after the last focus is one that moved since you looked, as its sidebar marks unread.
-// Undocumented, so read only, and nothing shows if its shape changes. ponytail: every record is
-// read each tick (~150 KB each); skip unchanged files by mtime if that ever shows.
-export const unreadOf = (records: unknown[], self?: string): Unread[] =>
-  records
-    .filter(
-      (r): r is { sessionId: string; title?: unknown; lastTurnEdgeAt: number; lastFocusedAt?: number } =>
-        !!r &&
-        typeof r === 'object' &&
-        !(r as { isArchived?: boolean }).isArchived &&
-        typeof (r as { sessionId?: unknown }).sessionId === 'string' &&
-        /^local_[A-Za-z0-9-]{1,100}$/.test((r as { sessionId: string }).sessionId) &&
-        (r as { sessionId: string }).sessionId !== self &&
-        typeof (r as { lastTurnEdgeAt?: unknown }).lastTurnEdgeAt === 'number' &&
-        (r as { lastTurnEdgeAt: number }).lastTurnEdgeAt > Number((r as { lastFocusedAt?: unknown }).lastFocusedAt ?? 0),
-    )
-    .map(r => ({ host: r.sessionId, title: String(r.title ?? '').slice(0, 80) || 'Untitled', at: r.lastTurnEdgeAt }))
+// The desktop app keeps a record of each session (on macOS, under Application Support), but its
+// lastFocusedAt is when you switched to a session, and its lastTurnEdgeAt moves when a turn starts
+// as well as ends. So: you stopped looking at a session when you focused the next one (the last
+// focused is still in front of you), and it's unread when its last turn ended after that, from its
+// own turn.complete where it runs Overalls (its status file), else the app's edge, and not while a
+// turn runs. Undocumented, so read only, and nothing shows if its shape changes. ponytail: every
+// record is read each tick (~150 KB each); skip unchanged files by mtime if that ever shows.
+type AppRecord = { sessionId: string; title?: unknown; isArchived?: unknown; lastTurnEdgeAt?: unknown; lastFocusedAt?: unknown }
+export const unreadOf = (records: unknown[], beats: Beat[], self?: string): Unread[] => {
+  const all = records.filter(
+    (r): r is AppRecord =>
+      !!r && typeof r === 'object' && typeof (r as AppRecord).sessionId === 'string' && /^local_[A-Za-z0-9-]{1,100}$/.test((r as AppRecord).sessionId),
+  )
+  const focus = all.map(r => Number(r.lastFocusedAt) || 0).sort((a, b) => a - b)
+  const live = new Map(beats.flatMap(b => (b.host ? [[b.host, b] as const] : [])))
+  return all
+    .flatMap(r => {
+      const focused = Number(r.lastFocusedAt) || 0
+      const seenUntil = focused ? focus.find(f => f > focused) : 0
+      if (seenUntil === undefined || r.isArchived || r.sessionId === self) return []
+      const beat = live.get(r.sessionId)
+      if (beat?.busy) return []
+      const ended = beat?.endedAt || Number(r.lastTurnEdgeAt) || 0
+      return ended > seenUntil ? [{ host: r.sessionId, title: String(r.title ?? '').slice(0, 80) || 'Untitled', at: ended }] : []
+    })
     .sort((a, b) => a.at - b.at)
+}
 async function readUnread($: EngineInterface, options: Options) {
   if (!(await prefs($, options)).unread) return
   const root = `${await $.env.get('HOME')}/Library/Application Support/Claude/claude-code-sessions`
@@ -466,8 +479,12 @@ async function readUnread($: EngineInterface, options: Options) {
     )
   ).flat()
   const records = await Promise.all(files.map(f => $.fs.read(f).then(t => JSON.parse(String(t)) as unknown, () => undefined)))
-  const self = await $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined)
-  const found = unreadOf(records, self)
+  const [self, now, beats] = await Promise.all([
+    $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined),
+    $.clock.now().catch(() => Date.now()),
+    readBeats($),
+  ])
+  const found = unreadOf(records, liveBeats(beats, now, ''), self)
   await update($, unread, prev => (JSON.stringify(prev) === JSON.stringify(found) ? prev : found))
 }
 
@@ -627,6 +644,7 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
         <Box flexDirection="row" gap={2}>
           <Box flexDirection="row" flexGrow={1} />
           {...end}
+          {...unreadButton}
           {settings}
         </Box>
         {...(open ? [configBox] : [])}
@@ -644,6 +662,7 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
           {...widgets}
         </Box>
         {...end}
+        {...unreadButton}
         {settings}
       </Box>,
     )
@@ -801,24 +820,7 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
         ),
       ]
     : []
-  // The unread session that has waited longest, and how many more; pressing it goes there.
-  const oldest = waiting[0]
-  const unreadSegment = oldest
-    ? [
-        widget(
-          <Text dimColor>✉ </Text>,
-          <Button
-            key="unread"
-            label={oldest.title}
-            plain
-            hover={{ scope: 'unread', underline: true }}
-            onPress={() => void openSession($, oldest.host)}
-          />,
-          <Text dimColor> {ago(Math.max(0, nowMs - oldest.at))}{waiting.length > 1 ? ` · +${waiting.length - 1}` : ''}</Text>,
-        ),
-      ]
-    : []
-  const ponySegment = [...unreadSegment, ...mcpSegment, ...denialSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment, ...recapSegment]
+  const ponySegment = [...mcpSegment, ...denialSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment, ...recapSegment]
   // No tooltip prop: each card is drawn hidden over the Config box's blank row, revealed by its
   // hover scope.
   // Each card ends with the setting's command, so the prompt can set it too.
@@ -865,6 +867,19 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
       <Button key="settings" label="⚙" plain dimColor onPress={() => void update($, panel, p => (p === 'config' ? '' : 'config'))} />
     )
   )
+  // The unread session that has waited longest, as the sidebar's orange dot (with how many, when
+  // more than one), held at the right before ⚙; pressing it goes there.
+  const oldest = waiting[0]
+  const unreadButton = oldest
+    ? [
+        <Button
+          key="unread"
+          label={`${UNREAD_DOT}${waiting.length > 1 ? ` ${waiting.length}` : ''}`}
+          plain
+          onPress={() => void openSession($, oldest.host)}
+        />,
+      ]
+    : []
   const inApp = shown === 'mcp' && (await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined)) === 'claude-desktop'
   // One row per failing server: its name, why, the error as Claude saw it, and what to do.
   const mcpBox = (
@@ -1244,16 +1259,26 @@ export const register: Register = (on, options) => {
       const reading = { tokens: context.tokens, window: context.window }
       await update($, history, prev => [...prev, reading].slice(-12))
     }
+    // When it ended, before the heartbeat writes it, for the Sessions Pane and Unread.
+    const { awayMs } = await read($, activity)
+    const at = await $.clock.now().catch(() => Date.now())
+    await update($, activity, a => ({ ...a, endedAt: at, awayMs: 0, busy: false }))
     await refreshPonytail($, options)
     await refreshTitle($, options).catch(() => {})
     await heartbeat($, options).catch(() => {})
     // The turn just sent the transcript, so a recap now reads it from the cache. Not awaited: it
     // takes as long as a reply.
-    const { awayMs } = await read($, activity)
-    const at = await $.clock.now().catch(() => Date.now())
-    await update($, activity, a => ({ ...a, endedAt: at, awayMs: 0 }))
     const p = await prefs($, options)
     if (p.recap && p.autorecap && !e.isAborted && wantsRecap(e.durationMs, awayMs)) void writeRecap($).catch(() => {})
+    return next(e)
+  })
+
+  // A turn running: its session isn't waiting on you, so not unread elsewhere.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      await update($, activity, a => ({ ...a, busy: true }))
+      await heartbeat($, options).catch(() => {})
+    }
     return next(e)
   })
 
