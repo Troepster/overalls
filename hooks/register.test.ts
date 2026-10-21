@@ -1,8 +1,13 @@
-import { test, expect, mock } from 'claude-code/testing'
+import { test as kitTest, expect, mock } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { Beat } from '../types'
 
-import { accountLimits, ago, bar, caveMode, contrast, liveBeats, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, runsOutAt, sampled, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
+// The Recap button is in every band: tests of the rest leave it out unless they turn it on.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const test = ((name: string, a: any, b?: any) =>
+  b ? kitTest(name, { ...a, options: { recap: 'off', ...a.options } }, b) : kitTest(name, { options: { recap: 'off' } }, a)) as unknown as typeof kitTest
+
+import { accountLimits, ago, askLine, bar, unreadOf, wantsRecap, caveMode, contrast, liveBeats, deniedBy, fmt, turnsLeft, sparkSvg, heat, hexToRgb, levelAfter, runsOutAt, sampled, untilReset, mcpLabel, mcpServer, mcpTrouble, ponyMode, ponytailLabel, weather } from './register'
 
 test('forecast helpers', () => {
   expect([0, 24, 25, 49, 50, 74, 75, 89, 90, 100].map(p => weather(p).word)).toEqual([
@@ -313,7 +318,7 @@ test('hover cards explain the Config box settings, and stay off the band', { opt
     (await ui.findAll({ type: 'Text' })).filter(t => t.props.inverse).map(t => t.text.trim().split(':')[0])
   expect(await cards()).toEqual([])
   await ui.press({ key: 'settings' })
-  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'View', 'Sessions', 'Turns', 'Denials', 'Cost', 'MCP'])
+  expect(await cards()).toEqual(['Weather', 'Ponytail', 'Caveman', 'Megacave', 'Limits', 'Resets', 'Run-out', 'Agents', 'View', 'Sessions', 'Unread', 'Last task', 'Recap', 'Auto', 'Turns', 'Denials', 'Cost', 'MCP'])
   // Each card ends with its command.
   const view = (await ui.findAll({ type: 'Text' })).find(t => t.props.inverse && t.text.trim().startsWith('View:'))
   expect(view?.text.trim().endsWith('/overalls view bar|pane|both')).toBe(true)
@@ -804,6 +809,7 @@ test('each session writes its status to a file of its own, and the Sessions Pane
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.root', () => ({ value: '/w/overalls' }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('session.id', () => ({ value: 'me' }))
   on('session.cwd', () => ({ value: '/w/overalls' }))
   on('session.model', () => ({ value: 'opus' }))
@@ -817,15 +823,17 @@ test('each session writes its status to a file of its own, and the Sessions Pane
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('turn.complete', () => ({ text: '' }))
   await $.session.start({ cwd: '/w/overalls', surface: 'desktop', isInteractive: true })
+  await $.prompt.submit({ text: 'Fix the login bug\nand its tests', wait: false, origin: { kind: 'composer' } })
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
   const mine = JSON.parse(files['/home/u/.claude/overalls/sessions/me.json']!)
-  expect(mine).toMatchObject({ id: 'me', project: 'overalls', percent: 25, ended: false, host: 'local_me', title: 'Mod display' })
+  expect(mine).toMatchObject({ id: 'me', project: 'overalls', percent: 25, ended: false, host: 'local_me', title: 'Mod display', ask: 'Fix the login bug' })
 
   const pane = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'Pane', requestId: 'overalls-sessions', props: { isFocused: false } as never })
   const texts = (await pane.findAll({ type: 'Text' })).map(t => t.text)
   expect(texts[0]).toContain('2 live sessions')
   expect(texts).toContain('▶ Mod display') // this one first, marked, by its latest title
   expect(texts).toContain('overalls') // then its project
+  expect(texts).toContain('› Fix the login bug') // and the last thing asked of it
   expect(texts).toContain('shop')
   expect(texts).toContain('⚠ Gmail')
   expect(texts).toContain('5s ago')
@@ -836,4 +844,121 @@ test('each session writes its status to a file of its own, and the Sessions Pane
   await pane.press({ key: 'session-open-other' })
   expect(opened.at(-1)).toEqual(['open', 'claude://claude.ai/epitaxy/local_abc'])
   await pane.unmount()
+})
+
+test('auto-recap: after a turn of 10 minutes or a 30-minute break; the last task is a prompt\'s first line', () => {
+  const min = 60_000
+  expect([wantsRecap(9 * min, 29 * min), wantsRecap(10 * min, 0), wantsRecap(1, 30 * min)]).toEqual([false, true, true])
+  expect(askLine('  Fix the login bug\nand the tests')).toBe('Fix the login bug')
+  expect(askLine('/ponytail lite')).toBe('')
+  expect(askLine('x'.repeat(300))).toHaveLength(100)
+})
+
+// Lets a recap the hook didn't wait for finish.
+const settle = async () => {
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+}
+
+// A session with a forked recap answering `reply`; `forks` counts the requests.
+const recapSession = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], reply = 'Building the Recap.\nTests next.') => {
+  memStore(on)
+  on('settings.read', () => ({ value: {} }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 50000, window: 200000 }, rateLimits: [] } }))
+  on('fs.write', () => ({ value: undefined }))
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  const clock = mock.clock(on, { now: Date.parse('2026-10-15T10:00:00Z') })
+  const forks: string[] = []
+  on('model.fork', (_$, e) => (forks.push(e.prompt), { value: { isAnswered: true, text: reply, usage: { input_tokens: 1, output_tokens: 1 } } }) as never)
+  const turn = (durationMs = 1000) => $.turn.complete({ answer: '', durationMs, isAborted: false, turnId: 't', reason: 'answer' })
+  const submit = (text: string) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
+  return { clock, forks, turn, submit }
+}
+
+test('Recap writes a recap of the session and opens it; pressed again it closes', { options: { weather: 'off', ponytail: 'off', caveman: 'off', limits: 'off', recap: 'on' } }, async ($, on) => {
+  const { forks, turn } = await recapSession($, on)
+  await turn()
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  expect(await textOf(ui)).toBe('Recap')
+  await ui.press({ key: 'recap' })
+  await settle()
+  expect(forks).toHaveLength(1)
+  expect(forks[0]).toContain('Recap this session')
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts).toContain('Building the Recap.')
+  expect(texts).toContain('Tests next.')
+  await ui.press({ key: 'recap' })
+  expect((await ui.findAll({ type: 'Text' })).map(t => t.text)).not.toContain('Tests next.')
+  await ui.unmount()
+})
+
+test('auto-recap writes one after a long turn or a break, and only when on', { options: { weather: 'off', ponytail: 'off', caveman: 'off', recap: 'on', autorecap: 'on' } }, async ($, on) => {
+  const { clock, forks, turn, submit } = await recapSession($, on)
+  await submit('first')
+  await turn()
+  await settle()
+  expect(forks).toHaveLength(0) // a short turn, no break
+  await turn(11 * 60_000)
+  await settle()
+  expect(forks).toHaveLength(1) // a long one
+  await clock.advance(31 * 60_000)
+  await submit('back again')
+  await turn()
+  await settle()
+  expect(forks).toHaveLength(2) // the first after a break
+})
+
+test('auto-recap stays off unless turned on', { options: { weather: 'off', ponytail: 'off', caveman: 'off', recap: 'on' } }, async ($, on) => {
+  const { forks, turn } = await recapSession($, on)
+  await turn(60 * 60_000)
+  await settle()
+  expect(forks).toHaveLength(0)
+})
+
+test('unread: a session whose turn moved after you last looked, not archived and not this one, oldest first', () => {
+  const r = (sessionId: string, lastTurnEdgeAt: number, lastFocusedAt?: number, more = {}) => ({ sessionId, title: sessionId, lastTurnEdgeAt, lastFocusedAt, ...more })
+  expect(unreadOf([
+    r('local_a', 300, 100),
+    r('local_b', 200, 100),
+    r('local_seen', 100, 200),
+    r('local_gone', 300, 100, { isArchived: true }),
+    r('local_me', 300, 100),
+    r('local_new', 50),
+    { sessionId: 'bad id', lastTurnEdgeAt: 9 },
+    null,
+  ], 'local_me').map(u => u.host)).toEqual(['local_new', 'local_b', 'local_a'])
+})
+
+test('the band shows the oldest unread session; pressing it goes there', { options: { weather: 'off', ponytail: 'off', caveman: 'off', limits: 'off' } }, async ($, on) => {
+  memStore(on)
+  const root = '/home/u/Library/Application Support/Claude/claude-code-sessions'
+  const files: Record<string, string> = {
+    [`${root}/acct/org/local_old.json`]: JSON.stringify({ sessionId: 'local_old', title: 'Fix the build', lastTurnEdgeAt: Date.parse('2026-10-21T09:48:00Z'), lastFocusedAt: 0 }),
+    [`${root}/acct/org/local_new.json`]: JSON.stringify({ sessionId: 'local_new', title: 'Docs', lastTurnEdgeAt: Date.parse('2026-10-21T09:58:00Z'), lastFocusedAt: 0 }),
+  }
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('settings.read', () => ({ value: {} }))
+  on('session.start', (_$, e) => e)
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('fs.write', () => ({ value: undefined }))
+  on('fs.list', (_$, e) => {
+    const kids = new Map<string, 'file' | 'dir'>()
+    for (const f of Object.keys(files)) {
+      if (!f.startsWith(`${e.path}/`)) continue
+      const [name, ...rest] = f.slice(e.path!.length + 1).split('/')
+      kids.set(name!, rest.length ? 'dir' : 'file')
+    }
+    return { value: [...kids].map(([name, kind]) => ({ name, kind, size: 1, mtimeMs: 0, isLink: false })) as never }
+  })
+  on('fs.read', (_$, e) => (files[e.path] !== undefined ? { value: files[e.path]! } : { deny: 'ENOENT' }))
+  const opened: string[][] = []
+  on('process.run', (_$, e) => (opened.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  mock.clock(on, { now: Date.parse('2026-10-21T10:00:00Z') })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
+  expect(await textOf(ui)).toBe('✉ Fix the build 12m · +1')
+  await ui.press({ key: 'unread' })
+  expect(opened.at(-1)).toEqual(['open', 'claude://claude.ai/epitaxy/local_old'])
+  await ui.unmount()
 })
