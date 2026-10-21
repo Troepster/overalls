@@ -84,6 +84,10 @@ you set the same setting with `/overalls` in a session that has the row.
 | Setting | Values | Default | What it does |
 |---|---|---|---|
 | Sessions | `on` · `off` | `on` | Share this session's status with the **Sessions** Pane, which lists every open session running Overalls; **Open** in the Config box (or `/overalls sessions`) shows it |
+| Unread | `on` · `off` | `on` | Show the desktop session that has waited longest since you last looked at it (`✉ title 12m · +2`); press it to go there |
+| Last task | `on` · `off` | `on` | Show your last prompt's first line on this session's card in the Sessions Pane |
+| Recap | `on` · `off` | `on` | A **Recap** button that has Claude sum up where the session is, for coming back to it |
+| Auto-recap | `on` · `off` | `off` | Write a recap without asking, after a turn that ran 10 minutes or more, or the first turn after a 30-minute break |
 | View | `bar` · `pane` · `both` | `bar` | Where Overalls shows: the band above the prompt, a Pane with everything at full size (it opens by itself only in a wide enough window), or both |
 | Weather detail | `off` · `minimal` · `normal` · `full` (typed; anything else counts as `full`) | `full` | How much of the forecast to show |
 | Ponytail level | `off` · `icon` · `text` (typed; anything else counts as `icon`, and an old on/off value as `icon`/`off`) | `icon` | Show whether Ponytail is installed and its level, after its logo or the word `ponytail:` |
@@ -192,14 +196,44 @@ yours marked ▶. The usage limits are your account's, so they sit on one line
 above the cards, each from the session that heard it most recently. In the desktop app, **Open ↗** on another session's card switches
 to it.
 
+With **Last task** on, a card also shows the first line of the last prompt you
+gave that session (slash commands aside).
+
 A session that ends marks its file ended; one that stops writing (closed
 without ending, crashed) drops off after two minutes. Only sessions running
 Overalls show up. Turn **Sessions** off to stop writing the file.
 
+## Unread
+
+In the desktop app, `✉` in the band names the session that has waited longest
+since you last looked at it: one whose turn moved after you left it, as the
+sidebar marks unread, with how long ago and how many more. Pressing it switches
+to that session. It reads the app's own record of each session, so it covers
+every session, not only those running Overalls. That record is undocumented: if
+the app changes it, `✉` stops showing rather than showing something wrong. The
+macOS app only for now.
+
+## Recap
+
+**Recap** in the band asks Claude to sum up the session in three short lines:
+what it's working on, what was done last, and what's waiting on you. It opens in
+a box above the band (always shown in the Pane), with **Refresh** for a new one;
+pressed again, the button closes it. It's one question over the session's own
+conversation, so it costs about as much as a short reply while the API still has
+the conversation cached, and the whole context afresh after a long break.
+
+**Auto-recap** writes one without asking, when a turn that ran 10 minutes or
+more ends (one you may have walked away from), or the first turn after a
+30-minute break. Both happen just after a turn, while the conversation is cached.
+It's off by default as it spends tokens unasked.
+
 ## Data and access
 
-Overalls makes no network requests and sends nothing anywhere. Everything it
-does stays inside your Claude Code session:
+Overalls makes no network requests of its own and sends nothing anywhere, with
+one exception: a **Recap** asks Claude through this session's own connection,
+as a turn does, sending the session's conversation with the request to sum it
+up (`$.model.fork`); only when you press Recap or turn Auto-recap on. Everything
+else stays inside your Claude Code session:
 
 - reads the session's context-window usage (`$.session.usage()`) after each turn
 - reads your Claude Code settings to see whether Ponytail is enabled
@@ -219,8 +253,14 @@ does stays inside your Claude Code session:
 - reads Ponytail's `config.json`, for its default level, and the
   `PONYTAIL_DEFAULT_MODE`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR` and `HOME`
   environment variables
-- reads each prompt you submit only to spot a Ponytail command (`/ponytail …`,
-  `stop ponytail`, `normal mode`), keeping nothing of it but the level
+- reads the desktop app's record of each session (`claude-code-sessions` under
+  `~/Library/Application Support/Claude`) every 30 seconds while Unread is on,
+  using only each session's id, title, archived flag and the times of its last
+  turn and your last look, to find unread sessions; it never writes there
+- reads each prompt you submit to spot a Ponytail command (`/ponytail …`,
+  `stop ponytail`, `normal mode`), and keeps its first line (up to 100
+  characters, slash commands aside) and when the last turn ended, in session
+  state, for Last task and Auto-recap
 - keeps the last 12 readings and the Ponytail level in session state, which is
   gone when the session ends
 - switches Ponytail's level or Caveman's mode only when you pick one from the
@@ -256,7 +296,8 @@ Apart from that store, the only files it writes are its session status files
 (`overalls/sessions/<session id>.json` in your Claude config directory: the
 session's title, project folder, model, context, limits, cost, counts of agents, MCP errors and denials,
 the Ponytail and Caveman levels, the desktop app's id for the session from
-`CLAUDE_CODE_HOST_SESSION_ID`, and when; never prompts or replies), which it
+`CLAUDE_CODE_HOST_SESSION_ID`, with Last task on your last prompt's first
+line, and when; never replies), which it
 also reads to draw the Sessions Pane. For the title it runs `grep` on this
 session's own transcript (`projects/<project>/<session id>.jsonl` in your
 Claude config directory) at the start and after each turn, matching only the
@@ -269,10 +310,10 @@ It hooks six events only to observe them, never changing what they carry:
 `session.end` (mark this session's status file ended), `session.measure`
 (note the usage-limit percentages a response reported),
 `tool.call` (note an MCP server failing or answering again, and a refused call), `turn.complete`
-(take a reading), `session.compact` (record the drop after a
+(take a reading, and with Auto-recap on start a recap), `session.compact` (record the drop after a
 compaction, and reset the Ponytail level to its default) and `prompt.submit`
 (note a Ponytail switch once your prompt has gone in, so `/ponytail lite` shows
-straight away). It also draws the band above
+straight away, and the prompt's first line for Last task). It also draws the band above
 the prompt.
 
 ## Development

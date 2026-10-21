@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Beat, Denial, McpTrouble, Reading, Sample } from '../types'
+import type { Activity, Beat, Denial, McpTrouble, Reading, Recap, Sample, Unread } from '../types'
 import { PONYTAIL_PNG } from './ponytail-icon'
 
 const history = atom({ plugin: 'overalls', key: 'history' } as const, [] as Reading[])
@@ -10,13 +10,19 @@ const level = atom({ plugin: 'overalls', key: 'level' } as const, '')
 const caveman = atom({ plugin: 'overalls', key: 'caveman' } as const, '')
 const mcpDown = atom({ plugin: 'overalls', key: 'mcpDown' } as const, {} as Record<string, McpTrouble>)
 // Which box is open above the band, if any: ⚙'s Config box or the MCP errors box. One at a time.
-const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents' | 'denials')
+const panel = atom({ plugin: 'overalls', key: 'panel' } as const, '' as '' | 'config' | 'mcp' | 'agents' | 'denials' | 'recap')
 const denials = atom({ plugin: 'overalls', key: 'denials' } as const, [] as Denial[])
 // Each usage limit's percent over the last hour, by kind, for when it runs out.
 // Was limitSamples, polled every 30 s; renamed so a running session drops those stale figures.
 const limitSamples = atom({ plugin: 'overalls', key: 'limitMeasures' } as const, {} as Record<string, Sample[]>)
 // The session's title, for the Sessions Pane; read after each turn, not on every heartbeat.
 const title = atom({ plugin: 'overalls', key: 'title' } as const, '')
+// The last recap of the session, and whether one is being written.
+const recap = atom({ plugin: 'overalls', key: 'recap' } as const, { text: '', at: 0, busy: false } as Recap)
+// The last prompt's first line, when the last turn ended and how long the gap before this one was.
+const activity = atom({ plugin: 'overalls', key: 'activity' } as const, { ask: '', endedAt: 0, awayMs: 0 } as Activity)
+// The desktop app's unread sessions, oldest first; read on the 30 s tick, not while drawing.
+const unread = atom({ plugin: 'overalls', key: 'unread' } as const, [] as Unread[])
 
 const BARS = '▁▂▃▄▅▆▇█'
 const DETAILS = ['off', 'minimal', 'normal', 'full'] as const
@@ -25,7 +31,7 @@ const ONOFF = ['on', 'off'] as const
 const RUNOUT = ['off', 'warn', 'always'] as const
 // Every setting and what it takes, in /overalls, the Config box and userConfig alike.
 const VIEWS = ['bar', 'pane', 'both'] as const
-const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF, runout: RUNOUT, view: VIEWS, sessions: ONOFF } as const
+const FIELDS = { weather: DETAILS, ponytail: PONY, caveman: PONY, megacave: ONOFF, limits: ONOFF, resets: ONOFF, cost: ONOFF, mcp: ONOFF, agents: ONOFF, turns: ONOFF, denials: ONOFF, runout: RUNOUT, view: VIEWS, sessions: ONOFF, lasttask: ONOFF, recap: ONOFF, autorecap: ONOFF, unread: ONOFF } as const
 type Field = keyof typeof FIELDS
 const COMPACT_AT = 75
 // The Config box's hover cards, keyed by the hover scope that reveals them. The band has none:
@@ -41,6 +47,10 @@ const TIPS = {
   'cfg-agents': 'Agents: how many subagents are running; press it to see them',
   'cfg-view': 'View: the band above the prompt, a Pane with everything at full size, or both',
   'cfg-sessions': 'Sessions: every open session running Overalls, in a Pane; each writes its status to a small file',
+  'cfg-unread': 'Unread: the desktop session that has waited longest since you last looked; press it to go there',
+  'cfg-lasttask': "Last task: your last prompt's first line on this session's card in the Sessions Pane",
+  'cfg-recap': 'Recap: a button that has Claude sum up where this session is, for coming back to it',
+  'cfg-autorecap': 'Auto: a recap without asking, after a turn that ran 10 minutes or followed a 30-minute break',
   'cfg-turns': 'Turns: about how many more turns fit, at the pace of the last few',
   'cfg-denials': 'Denials: tool calls that were refused (by you, a hook or a permission rule); press it to see them',
   'cfg-cost': 'Cost: what this session has cost so far',
@@ -379,7 +389,7 @@ async function heartbeat($: EngineInterface, options: Options, ended = false) {
   if (!(await prefs($, options)).sessions) return
   const id = await $.session.id()
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return
-  const [cwd, model, readings, usage, agents, down, refused, pony, cave, at, host, measured, named] = await Promise.all([
+  const [cwd, model, readings, usage, agents, down, refused, pony, cave, at, host, measured, named, done] = await Promise.all([
     $.session.cwd(),
     $.session.model().catch(() => ''),
     read($, history),
@@ -394,11 +404,14 @@ async function heartbeat($: EngineInterface, options: Options, ended = false) {
     $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined),
     read($, limitSamples),
     read($, title),
+    read($, activity),
   ])
+  const { lasttask } = await prefs($, options)
   const now = readings.at(-1)
   const beat: Beat = {
     id,
     title: named,
+    ask: lasttask && done.ask ? done.ask : undefined,
     project: cwd.split('/').filter(Boolean).at(-1) ?? cwd,
     cwd,
     model,
@@ -417,6 +430,69 @@ async function heartbeat($: EngineInterface, options: Options, ended = false) {
     host: host && /^[A-Za-z0-9_-]{1,128}$/.test(host) ? host : undefined,
   }
   await $.fs.write(`${await beatsDir($)}/${id}.json`, JSON.stringify(beat))
+}
+
+// The desktop app keeps a record of each session (on macOS, under Application Support): a turn
+// edge after the last focus is one that moved since you looked, as its sidebar marks unread.
+// Undocumented, so read only, and nothing shows if its shape changes. ponytail: every record is
+// read each tick (~150 KB each); skip unchanged files by mtime if that ever shows.
+export const unreadOf = (records: unknown[], self?: string): Unread[] =>
+  records
+    .filter(
+      (r): r is { sessionId: string; title?: unknown; lastTurnEdgeAt: number; lastFocusedAt?: number } =>
+        !!r &&
+        typeof r === 'object' &&
+        !(r as { isArchived?: boolean }).isArchived &&
+        typeof (r as { sessionId?: unknown }).sessionId === 'string' &&
+        /^local_[A-Za-z0-9-]{1,100}$/.test((r as { sessionId: string }).sessionId) &&
+        (r as { sessionId: string }).sessionId !== self &&
+        typeof (r as { lastTurnEdgeAt?: unknown }).lastTurnEdgeAt === 'number' &&
+        (r as { lastTurnEdgeAt: number }).lastTurnEdgeAt > Number((r as { lastFocusedAt?: unknown }).lastFocusedAt ?? 0),
+    )
+    .map(r => ({ host: r.sessionId, title: String(r.title ?? '').slice(0, 80) || 'Untitled', at: r.lastTurnEdgeAt }))
+    .sort((a, b) => a.at - b.at)
+async function readUnread($: EngineInterface, options: Options) {
+  if (!(await prefs($, options)).unread) return
+  const root = `${await $.env.get('HOME')}/Library/Application Support/Claude/claude-code-sessions`
+  const dirs = async (path: string) =>
+    (await $.fs.list(path).catch(() => [])).filter(f => f.kind === 'dir').map(f => `${path}/${f.name}`)
+  const files = (
+    await Promise.all(
+      (await Promise.all((await dirs(root)).map(dirs))).flat().map(async dir =>
+        (await $.fs.list(dir).catch(() => []))
+          .filter(f => f.kind === 'file' && /^local_[A-Za-z0-9-]+\.json$/.test(f.name))
+          .map(f => `${dir}/${f.name}`),
+      ),
+    )
+  ).flat()
+  const records = await Promise.all(files.map(f => $.fs.read(f).then(t => JSON.parse(String(t)) as unknown, () => undefined)))
+  const self = await $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined)
+  const found = unreadOf(records, self)
+  await update($, unread, prev => (JSON.stringify(prev) === JSON.stringify(found) ? prev : found))
+}
+
+// A recap is one question over the session's own transcript ($.model.fork), so its prefix comes
+// from the API's cache while that holds; a press after a long break pays for the context afresh.
+const RECAP_PROMPT =
+  'Recap this session for someone coming back to it: in at most three short lines, what it is working on, ' +
+  'what was done last, and what is waiting on them. Plain text, no preamble, no headings.'
+async function writeRecap($: EngineInterface) {
+  if ((await read($, recap)).busy) return
+  await update($, recap, r => ({ ...r, busy: true }))
+  const r = await $.model.fork({ prompt: RECAP_PROMPT }).catch(() => undefined)
+  const at = await $.clock.now().catch(() => Date.now())
+  await update($, recap, prev => (r?.isAnswered ? { text: r.text.trim(), at, busy: false } : { ...prev, busy: false }))
+  if (r?.isAnswered) await update($, panel, () => 'recap')
+  else $.ui.toast(`No recap: ${r?.reason ?? 'the request failed'}`)
+}
+// Auto-recap: after a turn long enough to have walked away from, or the first after a break.
+export const AWAY_MS = 30 * 60_000
+export const LONG_TURN_MS = 10 * 60_000
+export const wantsRecap = (durationMs: number, awayMs: number) => durationMs >= LONG_TURN_MS || awayMs >= AWAY_MS
+// A prompt's first line, for the Sessions card; slash commands aren't tasks.
+export const askLine = (text: string) => {
+  const line = text.trim().split('\n')[0]?.trim() ?? ''
+  return line.startsWith('/') ? '' : line.slice(0, 100)
 }
 
 // The sessions written to in the last LIVE_MS that haven't ended, this one first.
@@ -471,6 +547,10 @@ async function prefs($: EngineInterface, options: Options) {
   return {
     view: VIEWS.find(v => v === pick('view')) ?? 'bar',
     sessions: pick('sessions') !== 'off',
+    lasttask: pick('lasttask') !== 'off',
+    unread: pick('unread') !== 'off',
+    recap: pick('recap') !== 'off',
+    autorecap: pick('autorecap') === 'on',
     detail: DETAILS.find(d => d === pick('weather')) ?? 'full',
     pony: ponyMode(saved.ponytail ?? options.ponytail),
     cave: ponyMode(saved.caveman ?? options.caveman),
@@ -513,13 +593,15 @@ async function setPref($: EngineInterface, options: Options, field: string, valu
 // same way under the ⚙ row and the MCP errors, denials and agents boxes are always open.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, inPane: boolean, options: Options) {
-  const { view, sessions, detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials, runout } = await prefs($, options)
+  const { view, sessions, lasttask, unread: unreadOn, recap: recapOn, autorecap, detail, pony: ponyAs, cave: caveAs, megacave, limits, resets, cost, mcp, agents, turns, denials: showDenials, runout } = await prefs($, options)
   const refused = showDenials ? await read($, denials) : []
   const down = mcp ? Object.entries(await read($, mcpDown)) : []
   const readings = detail === 'off' ? [] : await read($, history)
   const pony = ponyAs !== 'off' ? await read($, ponytail) : ''
   const cave = caveAs !== 'off' ? await read($, caveman) : ''
   const usage = limits || cost || runout !== 'off' ? await $.session.usage().catch(() => undefined) : undefined
+  const summary = recapOn ? await read($, recap) : { text: '', at: 0, busy: false }
+  const waiting = unreadOn ? await read($, unread) : []
   // With nothing else to show, ⚙ still draws alone, so both turned off can be turned on again.
   if (!inPane && e.props.hasSurvey) return next(e)
   const els = $.ui.resolve(e)
@@ -554,6 +636,7 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
         {...(down.length ? [mcpBox] : [])}
         {...(refused.length ? [denialsBox] : [])}
         {...(running.length ? [agentsBox] : [])}
+        {...(summary.text ? [recapBox] : [])}
       </Box>
     ) : withPanel(
       <Box flexDirection="row" width="100%" alignItems="flex-start" gap={2}>
@@ -702,7 +785,40 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
         ),
       ]
     : []
-  const ponySegment = [...mcpSegment, ...denialSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment]
+  // Recap: writes one, or with one written opens it (the Pane always shows it).
+  const recapSegment = recapOn
+    ? [
+        widget(
+          <Button
+            key="recap"
+            label={summary.busy ? 'Recapping…' : 'Recap'}
+            plain
+            hover={{ scope: 'recap', underline: true }}
+            onPress={() =>
+              void (summary.text && !inPane ? update($, panel, p => (p === 'recap' ? '' : 'recap')) : writeRecap($))
+            }
+          />,
+        ),
+      ]
+    : []
+  // The unread session that has waited longest, and how many more; pressing it goes there.
+  const oldest = waiting[0]
+  const unreadSegment = oldest
+    ? [
+        widget(
+          <Text dimColor>✉ </Text>,
+          <Button
+            key="unread"
+            label={oldest.title}
+            plain
+            hover={{ scope: 'unread', underline: true }}
+            onPress={() => void openSession($, oldest.host)}
+          />,
+          <Text dimColor> {ago(Math.max(0, nowMs - oldest.at))}{waiting.length > 1 ? ` · +${waiting.length - 1}` : ''}</Text>,
+        ),
+      ]
+    : []
+  const ponySegment = [...unreadSegment, ...mcpSegment, ...denialSegment, ...agentSegment, ...usageSegments, ...(pony ? [widget(ponyIcon, iconGap, level)] : []), ...caveSegment, ...recapSegment]
   // No tooltip prop: each card is drawn hidden over the Config box's blank row, revealed by its
   // hover scope.
   // Each card ends with the setting's command, so the prompt can set it too.
@@ -816,6 +932,19 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
       ))}
     </Box>
   )
+  const recapBox = (
+    <Box flexDirection="column" borderStyle="round" paddingX={1} marginBottom={1}>
+      <Box flexDirection="row" gap={2}>
+        <Text bold>Recap</Text>
+        <Text dimColor>{ago(nowMs - summary.at)} ago</Text>
+        <Box flexDirection="row" flexGrow={1} />
+        <Button key="recap-refresh" label={summary.busy ? 'Recapping…' : 'Refresh'} plain dimColor onPress={() => void writeRecap($)} />
+        {...(inPane ? [] : [<Button key="recap-close" label="Close" plain dimColor onPress={() => void update($, panel, () => '')} />])}
+      </Box>
+      <Text> </Text>
+      {...summary.text.split('\n').filter(l => l.trim()).map(l => <Text>{l}</Text>)}
+    </Box>
+  )
   // Settings sit in two columns in the band, whose height is capped, and in one in the Pane.
   const configBox = (
   <Box flexDirection="column" borderStyle="round" paddingX={1} marginBottom={1}>
@@ -844,6 +973,13 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
           ...ONOFF.map(m => choice('resets', m, (m === 'on') === resets)),
         ])}
         {setting('agents', 'Agents', ONOFF.map(m => choice('agents', m, (m === 'on') === agents)))}
+        {setting('recap', 'Recap', [
+          ...ONOFF.map(m => choice('recap', m, (m === 'on') === recapOn)),
+          // Auto-recap belongs to Recap, so its switch shares the row, past a divider.
+          <Text dimColor>│</Text>,
+          <Text hover={{ scope: 'cfg-autorecap', underline: true }}>auto</Text>,
+          ...ONOFF.map(m => choice('autorecap', m, (m === 'on') === autorecap)),
+        ])}
       </Box>
       <Box flexDirection="column" width={inPane ? '100%' : '50%'} borderStyle="round" borderDimColor paddingX={1}>
         {setting('view', 'View', VIEWS.map(v => choice('view', v, v === view)))}
@@ -852,6 +988,8 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
           <Text dimColor>│</Text>,
           <Button key="sessions-open" label="Open" plain onPress={() => void $.ui.open({ id: 'overalls-sessions', title: 'Sessions' })} />,
         ])}
+        {setting('lasttask', 'Last task', ONOFF.map(m => choice('lasttask', m, (m === 'on') === lasttask)))}
+        {setting('unread', 'Unread', ONOFF.map(m => choice('unread', m, (m === 'on') === unreadOn)))}
         {setting('ponytail', 'Ponytail', [...PONY.map(m => choice('ponytail', m, m === ponyAs)), ...installPonytail])}
         {setting('cost', 'Cost', ONOFF.map(m => choice('cost', m, (m === 'on') === cost)))}
         {setting('mcp', 'MCP', ONOFF.map(m => choice('mcp', m, (m === 'on') === mcp)))}
@@ -870,6 +1008,11 @@ async function draw($: EngineInterface, e: any, next: (e: any) => Promise<any>, 
     ) : shown === 'agents' && running.length ? (
       <Box flexDirection="column" width="100%">
         {agentsBox}
+        {band}
+      </Box>
+    ) : shown === 'recap' && summary.text ? (
+      <Box flexDirection="column" width="100%">
+        {recapBox}
         {band}
       </Box>
     ) : shown === 'mcp' && down.length ? (
@@ -995,6 +1138,7 @@ async function drawSessions($: EngineInterface, e: any) {
             {...(b.ponytail && b.ponytail !== 'not installed' ? [<Text dimColor>ponytail {b.ponytail}</Text>] : [])}
             {...(b.caveman ? [<Text dimColor>caveman {b.caveman}</Text>] : [])}
           </Box>
+          {...(b.ask ? [<Text>› {b.ask}</Text>] : [])}
           <Text dimColor>{b.cwd}</Text>
         </Box>
       ))}
@@ -1006,14 +1150,21 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'overalls', description: 'Set the Overalls band', argumentHint: USAGE })
     await refreshPonytail($, options)
+    // A reload mid-recap drops the request; don't leave the button waiting on it.
+    await update($, recap, r => (r.busy ? { ...r, busy: false } : r))
     // Opened unasked, a Pane seats only where the window is wide enough (144 columns).
     if ((await prefs($, options)).view !== 'bar') await applyView($, 'pane')
     await refreshTitle($, options).catch(() => {})
     await heartbeat($, options).catch(() => {})
+    await readUnread($, options).catch(() => {})
     // Redraw every 30 s, so reset countdowns and the agent count move while nothing else happens.
     // A reload drops this environment's timers, so there is only ever the one.
     try {
-      $.clock.every(30_000, () => void heartbeat($, options).catch(() => {}).finally(() => $.ui.invalidate('ui.render')))
+      $.clock.every(30_000, () =>
+        void Promise.all([heartbeat($, options).catch(() => {}), readUnread($, options).catch(() => {})]).finally(() =>
+          $.ui.invalidate('ui.render'),
+        ),
+      )
     } catch {}
     return next(e)
   })
@@ -1034,7 +1185,7 @@ export const register: Register = (on, options) => {
     const value = field in FIELDS && (FIELDS[field as Field] as readonly string[]).includes(arg) ? arg : undefined
     if (value === undefined) {
       const p = await prefs($, options)
-      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, runout: ${p.runout}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}, view: ${p.view}, sessions: ${p.sessions ? 'on' : 'off'}`
+      const now = `weather: ${p.detail}, ponytail: ${p.pony}, caveman: ${p.cave}, megacave: ${p.megacave ? 'on' : 'off'}, limits: ${p.limits ? 'on' : 'off'}, resets: ${p.resets ? 'on' : 'off'}, agents: ${p.agents ? 'on' : 'off'}, turns: ${p.turns ? 'on' : 'off'}, denials: ${p.denials ? 'on' : 'off'}, runout: ${p.runout}, cost: ${p.cost ? 'on' : 'off'}, mcp: ${p.mcp ? 'on' : 'off'}, view: ${p.view}, sessions: ${p.sessions ? 'on' : 'off'}, lasttask: ${p.lasttask ? 'on' : 'off'}, recap: ${p.recap ? 'on' : 'off'}, autorecap: ${p.autorecap ? 'on' : 'off'}, unread: ${p.unread ? 'on' : 'off'}`
       return { text: `Overalls ${now}\nUsage: /overalls ${USAGE}` }
     }
     const deny = await setPref($, options, field, value)
@@ -1046,6 +1197,9 @@ export const register: Register = (on, options) => {
   // `/ponytail lite` and "stop ponytail" take effect as the prompt goes in.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
+    const now = await $.clock.now().catch(() => Date.now())
+    const ask = askLine(e.text)
+    await update($, activity, a => ({ ...a, ask: ask || a.ask, awayMs: a.endedAt ? now - a.endedAt : 0 }))
     const to = levelAfter(e.text)
     if (to) await update($, level, () => to === 'default' ? '' : to) // '' reads the default afresh
     await refreshPonytail($, options)
@@ -1093,6 +1247,13 @@ export const register: Register = (on, options) => {
     await refreshPonytail($, options)
     await refreshTitle($, options).catch(() => {})
     await heartbeat($, options).catch(() => {})
+    // The turn just sent the transcript, so a recap now reads it from the cache. Not awaited: it
+    // takes as long as a reply.
+    const { awayMs } = await read($, activity)
+    const at = await $.clock.now().catch(() => Date.now())
+    await update($, activity, a => ({ ...a, endedAt: at, awayMs: 0 }))
+    const p = await prefs($, options)
+    if (p.recap && p.autorecap && !e.isAborted && wantsRecap(e.durationMs, awayMs)) void writeRecap($).catch(() => {})
     return next(e)
   })
 
