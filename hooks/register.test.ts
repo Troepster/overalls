@@ -810,6 +810,7 @@ test('each session writes its status to a file of its own, and the Sessions Pane
   })
   on('session.root', () => ({ value: '/w/overalls' }))
   on('prompt.submit', (_$, e) => ({ text: e.text }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
   on('session.id', () => ({ value: 'me' }))
   on('session.cwd', () => ({ value: '/w/overalls' }))
   on('session.model', () => ({ value: 'opus' }))
@@ -823,10 +824,12 @@ test('each session writes its status to a file of its own, and the Sessions Pane
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('turn.complete', () => ({ text: '' }))
   await $.session.start({ cwd: '/w/overalls', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ turnId: 't1' } as never)
+  expect(JSON.parse(files['/home/u/.claude/overalls/sessions/me.json']!).busy).toBe(true) // working: not unread elsewhere
   await $.prompt.submit({ text: 'Fix the login bug\nand its tests', wait: false, origin: { kind: 'composer' } })
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
   const mine = JSON.parse(files['/home/u/.claude/overalls/sessions/me.json']!)
-  expect(mine).toMatchObject({ id: 'me', project: 'overalls', percent: 25, ended: false, host: 'local_me', title: 'Mod display', ask: 'Fix the login bug' })
+  expect(mine).toMatchObject({ id: 'me', project: 'overalls', percent: 25, ended: false, host: 'local_me', title: 'Mod display', ask: 'Fix the login bug', busy: false, endedAt: 1_000_000 })
 
   const pane = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'Pane', requestId: 'overalls-sessions', props: { isFocused: false } as never })
   const texts = (await pane.findAll({ type: 'Text' })).map(t => t.text)
@@ -916,26 +919,32 @@ test('auto-recap stays off unless turned on', { options: { weather: 'off', ponyt
   expect(forks).toHaveLength(0)
 })
 
-test('unread: a session whose turn moved after you last looked, not archived and not this one, oldest first', () => {
-  const r = (sessionId: string, lastTurnEdgeAt: number, lastFocusedAt?: number, more = {}) => ({ sessionId, title: sessionId, lastTurnEdgeAt, lastFocusedAt, ...more })
-  expect(unreadOf([
-    r('local_a', 300, 100),
-    r('local_b', 200, 100),
-    r('local_seen', 100, 200),
-    r('local_gone', 300, 100, { isArchived: true }),
-    r('local_me', 300, 100),
-    r('local_new', 50),
+test('unread: finished after you moved on from it, not while you watched, not while working', () => {
+  const r = (sessionId: string, lastFocusedAt: number, lastTurnEdgeAt: number, more = {}) => ({ sessionId, title: sessionId, lastFocusedAt, lastTurnEdgeAt, ...more })
+  const beat = (host: string, more: Partial<Beat>) => ({ host, ...more }) as Beat
+  const records = [
+    r('local_left', 100, 999), // you moved on at 150 (watched); its turn ended at 250, from its own hook
+    r('local_watched', 150, 999), // you moved on at 200; it ended at 180, while you watched
+    r('local_earlier', 200, 280), // you moved on at 300; no status file, the app's edge 280: before
+    r('local_front', 300, 400), // focused last: in front of you
+    r('local_working', 50, 900), // a turn running
+    r('local_never', 0, 60), // never looked at
+    r('local_gone', 10, 900, { isArchived: true }),
+    r('local_me', 20, 900),
     { sessionId: 'bad id', lastTurnEdgeAt: 9 },
     null,
-  ], 'local_me').map(u => u.host)).toEqual(['local_new', 'local_b', 'local_a'])
+  ]
+  const beats = [beat('local_left', { endedAt: 250 }), beat('local_watched', { endedAt: 180 }), beat('local_working', { busy: true, endedAt: 800 })]
+  expect(unreadOf(records, beats, 'local_me').map(u => [u.host, u.at])).toEqual([['local_never', 60], ['local_left', 250]])
 })
 
-test('the band shows the oldest unread session; pressing it goes there', { options: { weather: 'off', ponytail: 'off', caveman: 'off', limits: 'off' } }, async ($, on) => {
+test('the band shows an unread dot before ⚙; pressing it goes to the oldest unread session', { options: { weather: 'off', ponytail: 'off', caveman: 'off', limits: 'off' } }, async ($, on) => {
   memStore(on)
   const root = '/home/u/Library/Application Support/Claude/claude-code-sessions'
   const files: Record<string, string> = {
     [`${root}/acct/org/local_old.json`]: JSON.stringify({ sessionId: 'local_old', title: 'Fix the build', lastTurnEdgeAt: Date.parse('2026-10-21T09:48:00Z'), lastFocusedAt: 0 }),
     [`${root}/acct/org/local_new.json`]: JSON.stringify({ sessionId: 'local_new', title: 'Docs', lastTurnEdgeAt: Date.parse('2026-10-21T09:58:00Z'), lastFocusedAt: 0 }),
+    [`${root}/acct/org/local_front.json`]: JSON.stringify({ sessionId: 'local_front', title: 'Here', lastTurnEdgeAt: Date.parse('2026-10-21T09:59:00Z'), lastFocusedAt: Date.parse('2026-10-21T09:00:00Z') }),
   }
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('settings.read', () => ({ value: {} }))
@@ -957,7 +966,11 @@ test('the band shows the oldest unread session; pressing it goes there', { optio
   mock.clock(on, { now: Date.parse('2026-10-21T10:00:00Z') })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ plugin: 'overalls', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
-  expect(await textOf(ui)).toBe('✉ Fix the build 12m · +1')
+  // The sidebar's orange dot and how many, held right before ⚙.
+  const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
+  expect(keys.slice(-2)).toEqual(['unread', 'settings'])
+  const dot = (await ui.findAll({ type: 'Button' })).find(b => b.key === 'unread')
+  expect(dot?.props.label).toBe('🟠 2')
   await ui.press({ key: 'unread' })
   expect(opened.at(-1)).toEqual(['open', 'claude://claude.ai/epitaxy/local_old'])
   await ui.unmount()

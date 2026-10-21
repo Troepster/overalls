@@ -84,7 +84,7 @@ you set the same setting with `/overalls` in a session that has the row.
 | Setting | Values | Default | What it does |
 |---|---|---|---|
 | Sessions | `on` · `off` | `on` | Share this session's status with the **Sessions** Pane, which lists every open session running Overalls; **Open** in the Config box (or `/overalls sessions`) shows it |
-| Unread | `on` · `off` | `on` | Show the desktop session that has waited longest since you last looked at it (`✉ title 12m · +2`); press it to go there |
+| Unread | `on` · `off` | `on` | An orange dot before ⚙ while a desktop session waits unread (with how many, when more than one); press it to go to the one that has waited longest |
 | Last task | `on` · `off` | `on` | Show your last prompt's first line on this session's card in the Sessions Pane |
 | Recap | `on` · `off` | `on` | A **Recap** button that has Claude sum up where the session is, for coming back to it |
 | Auto-recap | `on` · `off` | `off` | Write a recap without asking, after a turn that ran 10 minutes or more, or the first turn after a 30-minute break |
@@ -205,12 +205,15 @@ Overalls show up. Turn **Sessions** off to stop writing the file.
 
 ## Unread
 
-In the desktop app, `✉` in the band names the session that has waited longest
-since you last looked at it: one whose turn moved after you left it, as the
-sidebar marks unread, with how long ago and how many more. Pressing it switches
-to that session. It reads the app's own record of each session, so it covers
-every session, not only those running Overalls. That record is undocumented: if
-the app changes it, `✉` stops showing rather than showing something wrong. The
+In the desktop app, an orange dot `🟠` before ⚙, like the sidebar's, shows while
+a session waits unread, with how many when there's more than one. Pressing it
+switches to the one that has waited longest. You stopped looking at a session when you switched to
+the next one (the app records each switch), and it's unread once its last turn
+ended after that: not while it's still working, and not for a turn that ended
+while you watched. Each session running Overalls notes when its turns start and
+end in its status file; for any other session the app's own record of its last
+turn stands in. That record is undocumented: if
+the app changes it, the dot stops showing rather than showing something wrong. The
 macOS app only for now.
 
 ## Recap
@@ -256,7 +259,8 @@ else stays inside your Claude Code session:
 - reads the desktop app's record of each session (`claude-code-sessions` under
   `~/Library/Application Support/Claude`) every 30 seconds while Unread is on,
   using only each session's id, title, archived flag and the times of its last
-  turn and your last look, to find unread sessions; it never writes there
+  turn and when you last switched to it, to find unread sessions; it never
+  writes there
 - reads each prompt you submit to spot a Ponytail command (`/ponytail …`,
   `stop ponytail`, `normal mode`), and keeps its first line (up to 100
   characters, slash commands aside) and when the last turn ended, in session
@@ -296,8 +300,9 @@ Apart from that store, the only files it writes are its session status files
 (`overalls/sessions/<session id>.json` in your Claude config directory: the
 session's title, project folder, model, context, limits, cost, counts of agents, MCP errors and denials,
 the Ponytail and Caveman levels, the desktop app's id for the session from
-`CLAUDE_CODE_HOST_SESSION_ID`, with Last task on your last prompt's first
-line, and when; never replies), which it
+`CLAUDE_CODE_HOST_SESSION_ID`, whether a turn is running and when the last
+ended, with Last task on your last prompt's first line, and when; never
+replies), which it
 also reads to draw the Sessions Pane. For the title it runs `grep` on this
 session's own transcript (`projects/<project>/<session id>.jsonl` in your
 Claude config directory) at the start and after each turn, matching only the
@@ -306,8 +311,9 @@ the transcript is read. The only other program it starts is the system opener,
 in the desktop app: for Customize › Connectors when you press **Reconnect**, and
 for another session when you press **Open ↗** on its card.
 
-It hooks six events only to observe them, never changing what they carry:
-`session.end` (mark this session's status file ended), `session.measure`
+It hooks seven events only to observe them, never changing what they carry:
+`session.end` (mark this session's status file ended), `turn.start` (note in
+the status file that a turn is running), `session.measure`
 (note the usage-limit percentages a response reported),
 `tool.call` (note an MCP server failing or answering again, and a refused call), `turn.complete`
 (take a reading, and with Auto-recap on start a recap), `session.compact` (record the drop after a

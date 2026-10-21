@@ -1,6 +1,6 @@
 {
   "name": "overalls",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Status band above the prompt: context weather, usage limits, and the Ponytail and Caveman levels",
   "author": {
     "name": "Troepster"
@@ -42,7 +42,7 @@
     "unread": {
       "type": "string",
       "title": "Unread",
-      "description": "Show the desktop session that has waited longest since you last looked at it, and go there when pressed: on or off",
+      "description": "An orange dot before the settings button while a desktop session waits unread; press it to go to the one that has waited longest: on or off",
       "default": "on"
     },
     "recap": {
